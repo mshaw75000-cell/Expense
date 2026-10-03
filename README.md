@@ -12,6 +12,14 @@ A phone app for work receipts. It runs in the browser and needs no install, acco
 
 Receipts are kept **only on your phone**, in the browser's storage.
 
+### Sending
+
+The submit screen has a **Send with** choice (remembered for next time):
+
+- **Choose an app** – your phone's app menu opens so you can pick Gmail, Outlook, Mail or anything else, with the files attached. Android phones won't share Excel files this way, so there the spreadsheet is attached as a CSV (opens in Excel).
+- **My default email app** – opens your default email app with the message filled in; the files are saved for you to attach.
+- **Just save the files** – saves the PDF and spreadsheet to your phone.
+
 ## Locking, reopening and exception reports
 
 - A submitted claim is **locked**: its receipts can be viewed but not changed or deleted.

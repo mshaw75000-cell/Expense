@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=7">
+  <link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
   <header class="topbar">
@@ -269,7 +269,13 @@
         <span>New email address</span>
         <input type="email" id="sendToNew" placeholder="name@mentis.com">
       </label>
-      <p class="small attach-note">📎 Attaches the <strong>PDF claim</strong> (summary, receipts and supporting photos) and an <strong>Excel spreadsheet</strong> of every line.</p>
+      <p class="small attach-note">📎 Attaches the <strong>PDF claim</strong> (summary, receipts and supporting photos) and a <strong>spreadsheet</strong> of every line.</p>
+      <fieldset class="field" id="viaPicker">
+        <span>Send with</span>
+        <label class="radio" id="viaShareOpt"><input type="radio" name="via" value="share"> Choose an app – Gmail, Outlook, Mail…</label>
+        <label class="radio"><input type="radio" name="via" value="email"> My default email app</label>
+        <label class="radio"><input type="radio" name="via" value="save"> Just save the files</label>
+      </fieldset>
       <div class="row">
         <button class="btn ghost" id="sendCancel">Cancel</button>
         <button class="btn primary" id="sendGo">Send</button>
@@ -281,11 +287,11 @@
   <div class="toast" id="toast" hidden></div>
   <div class="busy" id="busy" hidden><div class="spinner"></div></div>
 
-  <script src="ocr.js?v=7"></script>
-  <script src="pdf.js?v=7"></script>
-  <script src="xlsx.js?v=7"></script>
-  <script src="recon.js?v=7"></script>
-  <script src="crop.js?v=7"></script>
-  <script src="app.js?v=7"></script>
+  <script src="ocr.js?v=8"></script>
+  <script src="pdf.js?v=8"></script>
+  <script src="xlsx.js?v=8"></script>
+  <script src="recon.js?v=8"></script>
+  <script src="crop.js?v=8"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

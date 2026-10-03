@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '7';
+  const APP_VERSION = '8';
   const UNITS = ['Mentis', 'Macrack'];
 
   /* ---------------- Storage ---------------- */
@@ -886,10 +886,14 @@
       });
       const xlsx = buildClaimSheet({ month, label, ordered, exceptions, submissionNo, previous, total, totalGst });
       const base = `Expense_Claim_${safeFile(who)}_${month}${submissionNo > 1 ? `_resub${submissionNo - 1}` : ''}`;
-      const files = [
-        new File([pdf], `${base}.pdf`, { type: 'application/pdf' }),
-        new File([xlsx], `${base}.xlsx`, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
-      ];
+      const pdfFile = new File([pdf], `${base}.pdf`, { type: 'application/pdf' });
+      const xlsxFile = new File([xlsx], `${base}.xlsx`, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const csvFile = new File([buildClaimCsv(ordered, label)], `${base}.csv`, { type: 'text/csv' });
+      const files = [pdfFile, xlsxFile];
+      // Android's share menu won't take Excel files, so fall back to the same spreadsheet as CSV
+      // (opens in Excel) rather than skipping the app picker.
+      const canShare = f => !!(navigator.canShare && navigator.canShare({ files: f }));
+      const shareFiles = canShare(files) ? files : canShare([pdfFile, csvFile]) ? [pdfFile, csvFile] : canShare([pdfFile]) ? [pdfFile] : null;
 
       const subject = `Expense claim – ${who} – ${label}${resubTag}`;
       const lines = unitLines.map(([u, l]) => `${u}: ${plural(l.length, 'receipt')}, ${money(l.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0))}`);
@@ -901,11 +905,11 @@
         `Total: ${money(total) || '$0.00'} (GST ${money(totalGst) || '$0.00'}; ex GST ${money(total - totalGst) || '$0.00'})${exText}\n\n` +
         `Attached: PDF claim with receipts and supporting documents, and an Excel spreadsheet.\n\nThanks,\n${settings.name || ''}`.trim();
 
-      prepared = { files, subject, body, month, items, total, exceptions, copy };
-      const canShareFiles = !!(navigator.canShare && navigator.canShare({ files }));
-      $('sendNote').textContent = canShareFiles
-        ? 'Your share sheet will open – pick Mail or Outlook. The recipient’s address is copied, so just paste it into “To” if it isn’t filled in.'
-        : 'This browser can’t attach files to email directly: the files will download and your email app will open with the message ready – attach the downloaded files.';
+      prepared = { files, shareFiles, subject, body, month, items, total, exceptions, copy };
+      $('viaShareOpt').hidden = !shareFiles;
+      const via = shareFiles ? (settings.sendVia || 'share') : (settings.sendVia === 'save' ? 'save' : 'email');
+      document.querySelectorAll('#viaPicker input').forEach(i => { i.checked = i.value === via; });
+      updateSendNote();
       go.disabled = false; go.textContent = copy ? 'Send copy' : submissionNo > 1 ? 'Resubmit' : 'Submit';
     } catch (err) {
       console.error(err);
@@ -961,6 +965,39 @@
     return Xlsx.buildXlsx(sheets);
   }
 
+  const sendVia = () => { const c = document.querySelector('#viaPicker input:checked'); return c ? c.value : 'share'; };
+  function updateSendNote() {
+    const p = prepared;
+    if (!p) return;
+    const via = sendVia();
+    $('sendNote').textContent =
+      via === 'share' ? `Your phone’s app menu opens – pick Gmail, Outlook, Mail or any other app. The recipient’s address is copied, so paste it into “To”.${p.shareFiles && p.shareFiles.length === 2 && /csv$/.test(p.shareFiles[1].name) ? ' (This phone only shares the spreadsheet as CSV – it opens in Excel.)' : p.shareFiles && p.shareFiles.length === 1 ? ' (This phone can only share the PDF this way – the spreadsheet is saved to your files.)' : ''}`
+      : via === 'email' ? 'Your default email app opens with the address, subject and message filled in. The files are saved to your phone – attach them to the email.'
+      : 'The PDF and spreadsheet are saved to your phone (Downloads / Files) to send however you like.';
+  }
+  document.querySelectorAll('#viaPicker input').forEach(i => i.addEventListener('change', () => {
+    settings.sendVia = i.value; saveSettings(); updateSendNote();
+  }));
+
+  function saveFiles(files) {
+    for (const f of files) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(f);
+      a.download = f.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }
+  }
+
+  function buildClaimCsv(ordered, label) {
+    const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const head = ['Ref', 'Claim month', 'Business unit', 'Date', 'Vendor', 'ABN', 'Expense type', 'Purpose', 'Ex GST', 'GST', 'Total', 'Supporting docs', 'Receipt'];
+    const rows = ordered.map(r => [r.ref, label, r.unit || '', r.date ? r.date.split('-').reverse().join('/') : '', r.vendor || '', r.abn || '', r.category || '', r.purpose || '',
+      ((parseFloat(r.amount) || 0) - (parseFloat(r.gst) || 0)).toFixed(2), (parseFloat(r.gst) || 0).toFixed(2), (parseFloat(r.amount) || 0).toFixed(2),
+      (r.attachments || []).length, r.image ? 'Yes' : 'To follow']);
+    return '\uFEFF' + [head, ...rows].map(r => r.map(q).join(',')).join('\r\n');
+  }
+
   $('sendGo').onclick = async () => {
     if (!prepared) return;
     let to = $('sendTo').value;
@@ -975,28 +1012,30 @@
     // Copy the address so it can be pasted into the To field (not awaited: keep the tap "live" for share()).
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(to).catch(() => {});
 
-    if (navigator.canShare && navigator.canShare({ files: p.files })) {
+    const via = sendVia();
+    if (via === 'share' && p.shareFiles) {
       try {
-        await navigator.share({ files: p.files, title: p.subject, text: p.body });
+        await navigator.share({ files: p.shareFiles, title: p.subject, text: p.body });
+        if (!p.shareFiles.some(f => /xlsx|csv$/.test(f.name))) saveFiles([p.files[1]]); // spreadsheet the phone wouldn't share
         await markSubmitted(p, to);
       } catch (err) {
-        if (err && err.name === 'AbortError') return; // user closed the share sheet
+        if (err && err.name === 'AbortError') return; // closed the app menu without sending
         console.error(err);
-        mailtoFallback(to, p);
+        toast('Couldn’t open the app menu – tap Submit again, or choose another “Send with” option.', 5000);
       }
+    } else if (via === 'save') {
+      saveFiles(p.files);
+      setTimeout(async () => {
+        if (!p.copy && confirm('Files saved. Once you’ve emailed them, mark the claim as submitted (this locks its receipts)?')) await markSubmitted(p, to);
+        else if (p.copy) $('sendSheet').hidden = true;
+      }, 800);
     } else {
       mailtoFallback(to, p);
     }
   };
 
   function mailtoFallback(to, p) {
-    for (const f of p.files) {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(f);
-      a.download = f.name;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    }
+    saveFiles(p.files);
     const href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(p.subject)}&body=${encodeURIComponent(p.body + '\n\n(Attachments: ' + p.files.map(f => f.name).join(', ') + ')')}`;
     setTimeout(() => {
       window.location.href = href;
