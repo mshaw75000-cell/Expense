@@ -134,7 +134,7 @@ body.selecting .fab { display: none; }
 
 .preview-wrap { position: relative; background: #e7ebf0; border-radius: var(--radius); padding: 10px; margin-bottom: 16px; text-align: center; }
 .preview-wrap img { max-width: 100%; max-height: 42vh; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
-.preview-wrap .btn { position: absolute; top: 14px; right: 14px; background: rgba(255,255,255,.92); }
+#recropBtn { position: absolute; top: 14px; right: 14px; background: rgba(255,255,255,.92); }
 
 .chips { list-style: none; padding: 0; margin: 0 0 10px; display: grid; gap: 8px; }
 .chips li { display: flex; align-items: center; justify-content: space-between; background: #fff; border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 12px; }
@@ -260,3 +260,17 @@ fieldset.field { border: 0; padding: 0; margin: 0 0 14px; }
 .rc-more { margin-top: 16px; }
 .rc-more summary { cursor: pointer; font-weight: 600; color: var(--primary); padding: 6px 0; }
 #listView { padding-bottom: calc(190px + var(--safe-bottom)); }
+
+/* ---------- Claims without a receipt (yet) ---------- */
+.pill-fab {
+  position: fixed; left: 16px; bottom: calc(32px + var(--safe-bottom)); z-index: 5;
+  display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 999px;
+  padding: 12px 16px; background: var(--card); color: var(--primary); font-weight: 700;
+  box-shadow: 0 4px 14px rgba(0,0,0,.18);
+}
+.thumb-missing { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: #fff4e0 !important; color: #b26a00; border: 1.5px dashed #e0a100; }
+.thumb-missing span { font-size: 8px; letter-spacing: -.2px; font-weight: 700; text-transform: uppercase; }
+.no-receipt { padding: 18px 8px 8px; color: #b26a00; }
+.no-receipt p { margin: 4px 0; color: var(--text); }
+.no-receipt-btns { justify-content: center; margin-top: 12px; }
+.no-receipt-btns .btn { flex: 1; max-width: 180px; }

@@ -62,6 +62,7 @@
     // y is the text baseline measured from the top of the page.
     text(s, x, y, { size = 11, bold = false, color = '#13202e', align = 'left' } = {}) {
       if (align === 'right') x -= textWidth(s, size, bold);
+      else if (align === 'center') x -= textWidth(s, size, bold) / 2;
       this.ops.push(`BT /${bold ? 'F2' : 'F1'} ${size} Tf ${rgb(color)} rg ${x.toFixed(2)} ${(PAGE_H - y).toFixed(2)} Td (${esc(s)}) Tj ET`);
     }
     image(img, x, y, w, h) {
@@ -225,6 +226,12 @@
       let yy = 98;
       yy = heading(pg, yy);
       const boxW = PAGE_W - 2 * M, boxH = PAGE_H - 50 - yy;
+      if (!img.jpeg) { // claim submitted before its receipt
+        pg.rect(M, yy, boxW, 120, '#fff4e0');
+        pg.text('RECEIPT TO FOLLOW', PAGE_W / 2, yy + 52, { size: 16, bold: true, color: warn, align: 'center' });
+        pg.text('The receipt for this expense hasn’t been attached yet.', PAGE_W / 2, yy + 74, { size: 10, color: ink, align: 'center' });
+        return;
+      }
       const sc = Math.min(boxW / img.w, boxH / img.h);
       const iw = img.w * sc, ih = img.h * sc;
       pg.rect(M + (boxW - iw) / 2 - 1, yy - 1, iw + 2, ih + 2, '#dfe4ea');

@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '6';
+  const APP_VERSION = '7';
   const UNITS = ['Mentis', 'Macrack'];
 
   /* ---------------- Storage ---------------- */
@@ -93,11 +93,11 @@
   // What accounts sees as a change: these fields, compared with the last submission.
   const TRACKED = [
     ['date', 'Date'], ['vendor', 'Vendor'], ['purpose', 'Purpose'], ['unit', 'Business unit'], ['category', 'Expense type'],
-    ['amount', 'Total'], ['gst', 'GST'], ['attachCount', 'Supporting documents'], ['imageVer', 'Receipt image'],
+    ['amount', 'Total'], ['gst', 'GST'], ['hasReceipt', 'Receipt'], ['attachCount', 'Supporting documents'], ['imageVer', 'Receipt image'],
   ];
   const snapshotOf = (r, ref) => ({
     id: r.id, ref, date: r.date || '', vendor: r.vendor || '', purpose: r.purpose || '', unit: r.unit || '', category: r.category || '',
-    amount: r.amount || '', gst: r.gst || '', attachCount: (r.attachments || []).length, imageVer: r.imageVer || 0,
+    amount: r.amount || '', gst: r.gst || '', hasReceipt: !!r.image, attachCount: (r.attachments || []).length, imageVer: r.imageVer || 0,
   });
   const showVal = (k, v) => (k === 'amount' || k === 'gst') ? (v === '' ? '(blank)' : money(v)) : k === 'imageVer' ? 'version ' + (v + 1) : k === 'date' ? fmtDay(v) : (v === '' ? '(blank)' : String(v));
 
@@ -111,7 +111,10 @@
       const cur = now.get(old.id);
       if (!cur) { out.push({ ref: old.ref, type: 'Removed', vendor: old.vendor, detail: `Removed from the claim (was ${money(old.amount)} on ${fmtDay(old.date)}, ${old.unit})` }); continue; }
       const changes = TRACKED.filter(([k]) => String(old[k]) !== String(cur[k]))
-        .map(([k, label]) => k === 'imageVer' ? 'Receipt image replaced' : `${label}: ${showVal(k, old[k])} → ${showVal(k, cur[k])}`);
+        .filter(([k]) => !(k === 'imageVer' && !old.hasReceipt)) // first receipt photo is reported as "added", not "replaced"
+        .map(([k, label]) => k === 'imageVer' ? 'Receipt image replaced'
+          : k === 'hasReceipt' ? (cur.hasReceipt ? 'Receipt photo added' : 'Receipt photo removed')
+          : `${label}: ${showVal(k, old[k])} → ${showVal(k, cur[k])}`);
       if (changes.length) out.push({ ref: cur.ref, type: 'Changed', vendor: cur.vendor, detail: changes.join('; ') });
     }
     const oldIds = new Set(last.items.map(i => i.id));
@@ -166,6 +169,7 @@
       const total = recs.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
       const byUnit = UNITS.map(u => [u, recs.filter(r => r.unit === u).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)]).filter(([, v]) => v);
       const unassigned = recs.filter(r => !r.unit).length;
+      const noReceipt = recs.filter(r => !r.image).length;
       const last = claim.submissions[claim.submissions.length - 1];
       let changes = 0;
       if (claim.status === 'reopened') changes = exceptionsFor(claim, orderForReport(recs).map(r => snapshotOf(r, r.ref))).length;
@@ -179,7 +183,7 @@
         <div class="month-head">
           <div>
             <h2>${monthLabel(m)}</h2>
-            <div class="month-meta">${plural(recs.length, 'receipt')}${byUnit.map(([u, v]) => ` · ${u} ${money(v)}`).join('')}${unassigned ? ` · <span class="warn">${unassigned} without business unit</span>` : ''}</div>
+            <div class="month-meta">${plural(recs.length, 'receipt')}${byUnit.map(([u, v]) => ` · ${u} ${money(v)}`).join('')}${unassigned ? ` · <span class="warn">${unassigned} without business unit</span>` : ''}${noReceipt ? ` · <span class="warn">${plural(noReceipt, 'receipt')} to follow</span>` : ''}</div>
           </div>
           <div class="month-total">${money(total) || '$0.00'}${status}</div>
         </div>
@@ -192,14 +196,14 @@
         </div>`;
       const ul = sec.querySelector('ul');
       for (const r of recs) {
-        const url = URL.createObjectURL(r.thumb);
-        thumbUrls.push(url);
+        const url = r.thumb ? URL.createObjectURL(r.thumb) : '';
+        if (url) thumbUrls.push(url);
         const li = document.createElement('li');
         li.className = 'receipt' + (isSubmitted ? ' locked' : '');
         li.dataset.id = r.id;
         const n = (r.attachments || []).length;
         li.innerHTML = `
-          <img class="thumb" src="${url}" alt="">
+          ${url ? `<img class="thumb" src="${url}" alt="">` : `<div class="thumb thumb-missing"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z"/><path d="M8 7h8M8 11h8M8 15h5"/></svg><span>To follow</span></div>`}
           <div class="info">
             <div class="desc">${escapeHtml(r.vendor || r.description || '(no vendor)')}</div>
             <div class="purpose">${escapeHtml(r.purpose || '')}</div>
@@ -250,14 +254,43 @@
   let quad = null;      // 4 corners in work-canvas pixels
   let editing = null;   // receipt record being created/edited
   let prefill = null;   // bank details to fill in when adding a missing claim from reconciliation
+  let cropFromEdit = false; // cropping started from the receipt screen (re-crop / receipt added later)
+
+  const newRecord = () => {
+    const r = { id: uid(), created: Date.now(), date: todayISO(), category: '', unit: settings.lastUnit || '', attachments: [], imageVer: 0, image: null, thumb: null, isNew: true };
+    if (prefill) { Object.assign(r, prefill); prefill = null; }
+    return r;
+  };
+
+  /** Start a claim with just the details – the receipt photo can be added later. */
+  async function startWithoutReceipt() {
+    editing = newRecord();
+    await fillEdit();
+    show('editView');
+    $('editForm').vendor.focus();
+  }
+  $('noReceiptBtn').onclick = startWithoutReceipt;
+
+  /** Add the receipt photo to a claim that was started without one. */
+  async function attachReceipt(file) {
+    if (!file || !editing) return;
+    captureForm(); // keep what's been typed
+    cropFromEdit = true;
+    busy(true);
+    try { startCrop(await fileToCanvas(file), null); }
+    catch (err) { console.error(err); toast('Could not open that photo.'); }
+    finally { busy(false); }
+  }
+  $('receiptCam').addEventListener('change', e => { attachReceipt(e.target.files[0]); e.target.value = ''; });
+  $('receiptLib').addEventListener('change', e => { attachReceipt(e.target.files[0]); e.target.value = ''; });
 
   async function onPhoto(file) {
     if (!file) return;
     busy(true);
     try {
       const canvas = await fileToCanvas(file);
-      editing = { id: uid(), created: Date.now(), date: todayISO(), category: '', unit: settings.lastUnit || '', attachments: [], imageVer: 0, isNew: true };
-      if (prefill) { Object.assign(editing, prefill); prefill = null; }
+      editing = newRecord();
+      cropFromEdit = false;
       startCrop(canvas, null);
     } catch (err) {
       console.error(err);
@@ -389,7 +422,7 @@
     $('enhanceBtn').setAttribute('aria-pressed', String(settings.enhance));
   };
   $('cropCancel').onclick = () => {
-    if (editing && editing.image) show('editView'); // re-crop cancelled
+    if (editing && cropFromEdit) show('editView'); // re-crop / add-later cancelled
     else { editing = null; show('listView'); }
   };
 
@@ -437,8 +470,10 @@
     categoryTouched = !!editing.category;
     setUnit(editing.unit || '');
     if (previewUrl) URL.revokeObjectURL(previewUrl);
-    previewUrl = URL.createObjectURL(editing.image);
-    $('editPreview').src = previewUrl;
+    previewUrl = editing.image ? URL.createObjectURL(editing.image) : '';
+    $('editPreview').hidden = !editing.image;
+    if (previewUrl) $('editPreview').src = previewUrl;
+    $('noReceipt').hidden = !!editing.image;
     $('deleteBtn').hidden = !!editing.isNew;
     $('recropBtn').hidden = !editing.original;
     renderAttachments();
@@ -451,8 +486,9 @@
     editLocked = !editing.isNew && await isLocked(month);
     const f = $('editForm');
     f.querySelectorAll('input, textarea, select').forEach(el => { el.disabled = editLocked; });
+    $('addReceiptBtns').hidden = editLocked;
     ['recropBtn', 'deleteBtn', 'saveBtn', 'gstAutoBtn', 'gstNoneBtn', 'attachAdd'].forEach(id => { $(id).hidden = editLocked || (id === 'deleteBtn' && editing.isNew) || (id === 'recropBtn' && !editing.original); });
-    $('ocrAgainBtn').hidden = editLocked;
+    $('ocrAgainBtn').hidden = editLocked || !editing.image;
     $('lockBanner').hidden = !editLocked;
     $('lockMsg').textContent = `Locked – part of the submitted ${monthLabel(month)} claim.`;
     $('editCancel').textContent = editLocked ? 'Back' : 'Cancel';
@@ -607,6 +643,7 @@
 
   $('recropBtn').onclick = async () => {
     captureForm();
+    cropFromEdit = true;
     busy(true);
     try { startCrop(await fileToCanvas(editing.original), editing.quad); }
     finally { busy(false); }
@@ -618,6 +655,7 @@
     captureForm();
     editing.exgst = editing.amount !== '' ? fix2(num(editing.amount) - (num(editing.gst) || 0)) : '';
     if (!editing.vendor) return toast('Add the vendor.');
+    if (!editing.image && editing.amount === '') return toast('Add the total – there’s no receipt to read it from yet.');
     if (!editing.unit) return toast('Choose the business unit – Mentis or Macrack.');
     // Saving into a month that has already been submitted reopens that claim.
     const month = monthOf(editing);
@@ -786,6 +824,8 @@
       toast(`${plural(missing.length, 'receipt')} still need${missing.length === 1 ? 's' : ''} a vendor, total or business unit.`, 4500);
       return openEdit(missing[0].id);
     }
+    const toFollow = recs.filter(r => !r.image);
+    if (!copy && toFollow.length && !confirm(`${plural(toFollow.length, 'receipt')} in this claim ${toFollow.length === 1 ? 'is' : 'are'} still to follow:\n\n${toFollow.map(r => `• ${r.vendor} ${money(r.amount)}`).join('\n')}\n\nSubmit anyway? They'll be marked “Receipt to follow”. Adding the photo later reopens the claim and shows up on the exception report.`)) return;
     const sel = $('sendTo');
     sel.innerHTML = '';
     for (const em of settings.emails) sel.add(new Option(em, em));
@@ -837,7 +877,7 @@
     try {
       const withBytes = await Promise.all(ordered.map(async r => ({
         ...r,
-        jpeg: new Uint8Array(await r.image.arrayBuffer()),
+        jpeg: r.image ? new Uint8Array(await r.image.arrayBuffer()) : null,
         attachments: await Promise.all((r.attachments || []).map(async a => ({ ...a, jpeg: new Uint8Array(await a.blob.arrayBuffer()) }))),
       })));
       const pdf = ExpensePdf.buildClaimReport({
@@ -878,16 +918,16 @@
     const lines = ordered.map(r => [
       r.ref, label, r.unit || '', { v: r.date, t: 'date' }, r.vendor || '', r.abn || '', r.category || '', { v: r.purpose || '', t: 'wrap' },
       { v: (parseFloat(r.amount) || 0) - (parseFloat(r.gst) || 0), t: 'money' }, { v: parseFloat(r.gst) || 0, t: 'money' }, { v: parseFloat(r.amount) || 0, t: 'money' },
-      (r.attachments || []).length,
+      (r.attachments || []).length, r.image ? 'Yes' : 'To follow',
     ]);
-    lines.push(null, ['', '', '', '', { v: 'TOTAL', t: 'bold' }, '', '', '', { v: total - totalGst, t: 'boldMoney' }, { v: totalGst, t: 'boldMoney' }, { v: total, t: 'boldMoney' }, '']);
+    lines.push(null, ['', '', '', '', { v: 'TOTAL', t: 'bold' }, '', '', '', { v: total - totalGst, t: 'boldMoney' }, { v: totalGst, t: 'boldMoney' }, { v: total, t: 'boldMoney' }, '', '']);
     const sheets = [{
       name: 'Claim lines',
       columns: [
         { header: 'Ref', width: 6 }, { header: 'Claim month', width: 15 }, { header: 'Business unit', width: 14 }, { header: 'Date', width: 12, type: 'date' },
         { header: 'Vendor', width: 28 }, { header: 'ABN', width: 16 }, { header: 'Expense type', width: 22 }, { header: 'Purpose', width: 40 },
         { header: 'Ex GST', width: 12, type: 'money' }, { header: 'GST', width: 10, type: 'money' }, { header: 'Total', width: 12, type: 'money' },
-        { header: 'Supporting docs', width: 15, type: 'number' },
+        { header: 'Supporting docs', width: 15, type: 'number' }, { header: 'Receipt', width: 11 },
       ],
       rows: lines,
     }];
@@ -1045,9 +1085,17 @@
     if (b.dataset.add) {
       const t = reconData.transactions.find(x => x.key === b.dataset.add);
       if (!t) return;
-      prefill = { date: t.date, amount: t.amount.toFixed(2) };
-      toast('Take a photo of the receipt – the bank details will be filled in.', 4000);
-      $('cameraInput').click();
+      // Bank text like "BRISBANE AIRPORT PARKING BRISBANE AIRP QLD AUS Card xx8504" → "Brisbane Airport Parking"
+      let vendor = t.desc.replace(/\s+(card\s|value date|(qld|nsw|vic|wa|sa|tas|act|nt|aus|au)\b).*$/i, '').replace(/\s{2,}/g, ' ').trim();
+      const words = vendor.split(' ');
+      for (let n = 1; n < words.length; n++) { // drop a trailing repeat of the location ("… BRISBANE AIRP")
+        const tail = words.slice(n).join(' ').toLowerCase();
+        if (tail.length >= 4 && words.slice(0, n).join(' ').toLowerCase().includes(tail.split(' ')[0])) { vendor = words.slice(0, n).join(' '); break; }
+      }
+      vendor = vendor.slice(0, 40);
+      prefill = { date: t.date, amount: t.amount.toFixed(2), vendor: vendor.toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase()) };
+      startWithoutReceipt();
+      toast('Bank details filled in – add the receipt photo now or later.', 4000);
     }
   });
 

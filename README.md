@@ -8,6 +8,8 @@ A phone app for work receipts. It runs in the browser and needs no install, acco
 4. **Complete**: add what it was for, choose the **business unit** (Mentis or Macrack), and add any **supporting photos** (invoice, booking confirmation, attendee list…).
 5. **Submit monthly**: receipts are grouped by the month of their date. Each month is one claim; tap **Submit claim** to email accounts a **PDF** (summary by business unit, every receipt and supporting photo) and an **Excel spreadsheet** of every line.
 
+**No receipt yet?** Tap **No receipt yet** to start the claim with just the details (vendor, total, date, unit, purpose). It shows as *Receipt to follow*; open it any time and tap **Take photo** or **Choose photo** to add the receipt – the reader fills in anything still blank. You can submit a month with receipts still to follow (you'll be asked to confirm); they're marked *Receipt to follow* in the PDF and spreadsheet, and adding the photo later reopens the claim and appears on the exception report as "Receipt photo added". **Add claim** in Reconciliation also creates one of these, filled in from the bank line.
+
 Receipts are kept **only on your phone**, in the browser's storage.
 
 ## Locking, reopening and exception reports
