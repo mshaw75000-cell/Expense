@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '8';
+  const APP_VERSION = '9';
   const UNITS = ['Mentis', 'Macrack'];
 
   /* ---------------- Storage ---------------- */
@@ -837,6 +837,13 @@
     await prepare(month, recs, copy);
   }
   $('sendTo').onchange = e => { $('sendToNewWrap').hidden = e.target.value !== '__new'; };
+  // Copying is its own tap: phones allow only one protected action (clipboard, app menu) per tap.
+  $('copyToBtn').onclick = async () => {
+    const to = $('sendTo').value === '__new' ? $('sendToNew').value.trim() : $('sendTo').value;
+    if (!isEmail(to)) return toast('Enter the email address first.');
+    try { await navigator.clipboard.writeText(to); toast(`Copied ${to} – paste it into “To”.`); }
+    catch { toast(`Couldn’t copy – the address is ${to}`, 5000); }
+  };
   $('sendCancel').onclick = () => { $('sendSheet').hidden = true; };
   $('sendSheet').addEventListener('click', e => { if (e.target === $('sendSheet')) $('sendSheet').hidden = true; });
 
@@ -971,7 +978,7 @@
     if (!p) return;
     const via = sendVia();
     $('sendNote').textContent =
-      via === 'share' ? `Your phone’s app menu opens – pick Gmail, Outlook, Mail or any other app. The recipient’s address is copied, so paste it into “To”.${p.shareFiles && p.shareFiles.length === 2 && /csv$/.test(p.shareFiles[1].name) ? ' (This phone only shares the spreadsheet as CSV – it opens in Excel.)' : p.shareFiles && p.shareFiles.length === 1 ? ' (This phone can only share the PDF this way – the spreadsheet is saved to your files.)' : ''}`
+      via === 'share' ? `Your phone’s app menu opens – pick Gmail, Outlook, Mail or any other app. Tap Copy first if you want to paste the address into “To”.${p.shareFiles && p.shareFiles.length === 2 && /csv$/.test(p.shareFiles[1].name) ? ' (This phone only shares the spreadsheet as CSV – it opens in Excel.)' : p.shareFiles && p.shareFiles.length === 1 ? ' (This phone can only share the PDF this way – the spreadsheet is saved to your files.)' : ''}`
       : via === 'email' ? 'Your default email app opens with the address, subject and message filled in. The files are saved to your phone – attach them to the email.'
       : 'The PDF and spreadsheet are saved to your phone (Downloads / Files) to send however you like.';
   }
@@ -1009,9 +1016,6 @@
     saveSettings();
     const p = prepared;
 
-    // Copy the address so it can be pasted into the To field (not awaited: keep the tap "live" for share()).
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(to).catch(() => {});
-
     const via = sendVia();
     if (via === 'share' && p.shareFiles) {
       try {
@@ -1021,7 +1025,14 @@
       } catch (err) {
         if (err && err.name === 'AbortError') return; // closed the app menu without sending
         console.error(err);
-        toast('Couldn’t open the app menu – tap Submit again, or choose another “Send with” option.', 5000);
+        const why = `${err && err.name || 'Error'}${err && err.message ? ': ' + err.message : ''}`;
+        if (err && err.name !== 'NotAllowedError' && p.shareFiles.length > 1) {
+          // The phone wouldn't take these files – next tap shares just the PDF (spreadsheet gets saved).
+          p.shareFiles = [p.shareFiles[0]];
+          updateSendNote();
+        }
+        $('sendGo').textContent = 'Tap again to open apps';
+        toast(`The phone didn’t open the app menu (${why}). Tap the button again.`, 6000);
       }
     } else if (via === 'save') {
       saveFiles(p.files);

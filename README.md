@@ -16,7 +16,7 @@ Receipts are kept **only on your phone**, in the browser's storage.
 
 The submit screen has a **Send with** choice (remembered for next time):
 
-- **Choose an app** – your phone's app menu opens so you can pick Gmail, Outlook, Mail or anything else, with the files attached. Android phones won't share Excel files this way, so there the spreadsheet is attached as a CSV (opens in Excel).
+- **Choose an app** – your phone's app menu opens so you can pick Gmail, Outlook, Mail or anything else, with the files attached. Tap **Copy** beside the address first if you want to paste it into "To" (it can't be copied in the same tap that opens the app menu). Android phones won't share Excel files this way, so there the spreadsheet is attached as a CSV (opens in Excel).
 - **My default email app** – opens your default email app with the message filled in; the files are saved for you to attach.
 - **Just save the files** – saves the PDF and spreadsheet to your phone.
 

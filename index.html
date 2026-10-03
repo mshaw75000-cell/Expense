@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=8">
+  <link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
   <header class="topbar">
@@ -261,10 +261,13 @@
       <h2 id="sendTitle">Submit claim</h2>
       <p class="muted" id="sendSummary"></p>
       <div class="exceptions-box" id="sendExceptions" hidden></div>
-      <label class="field">
+      <div class="field">
         <span>Send to</span>
-        <select id="sendTo"></select>
-      </label>
+        <div class="row nowrap">
+          <select id="sendTo" class="grow" aria-label="Send to"></select>
+          <button type="button" class="btn ghost small" id="copyToBtn">Copy</button>
+        </div>
+      </div>
       <label class="field" id="sendToNewWrap" hidden>
         <span>New email address</span>
         <input type="email" id="sendToNew" placeholder="name@mentis.com">
@@ -287,11 +290,11 @@
   <div class="toast" id="toast" hidden></div>
   <div class="busy" id="busy" hidden><div class="spinner"></div></div>
 
-  <script src="ocr.js?v=8"></script>
-  <script src="pdf.js?v=8"></script>
-  <script src="xlsx.js?v=8"></script>
-  <script src="recon.js?v=8"></script>
-  <script src="crop.js?v=8"></script>
-  <script src="app.js?v=8"></script>
+  <script src="ocr.js?v=9"></script>
+  <script src="pdf.js?v=9"></script>
+  <script src="xlsx.js?v=9"></script>
+  <script src="recon.js?v=9"></script>
+  <script src="crop.js?v=9"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>
