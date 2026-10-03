@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b2a4a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Expenses">
+  <title>Mentis Expenses</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" id="brand">
+      <img id="brandLogo" alt="" hidden>
+      <span id="brandWord" class="wordmark">mentis</span>
+    </div>
+    <div class="topbar-title" id="viewTitle">Receipts</div>
+    <button class="icon-btn" id="settingsBtn" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </header>
+
+  <!-- ===== List view ===== -->
+  <main id="listView" class="view">
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-filter="pending">Pending</button>
+      <button class="tab" data-filter="sent">Sent</button>
+      <button class="tab" data-filter="all">All</button>
+    </div>
+    <div class="summary" id="summary"></div>
+    <ul class="receipt-list" id="receiptList"></ul>
+    <div class="empty" id="emptyState" hidden>
+      <svg viewBox="0 0 24 24" width="56" height="56" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z"/><path d="M8 7h8M8 11h8M8 15h5"/></svg>
+      <p>No receipts here yet.</p>
+      <p class="muted">Tap the camera button to snap one.</p>
+    </div>
+    <div class="bottom-bar" id="selectBar" hidden>
+      <button class="btn ghost" id="selectAllBtn">Select all</button>
+      <button class="btn primary" id="sendBtn">Send</button>
+    </div>
+    <label class="fab" aria-label="Take photo of receipt">
+      <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    </label>
+    <label class="fab fab-secondary" aria-label="Choose from photo library">
+      <input type="file" id="libraryInput" accept="image/*" hidden>
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+    </label>
+  </main>
+
+  <!-- ===== Crop view ===== -->
+  <section id="cropView" class="view dark" hidden>
+    <div class="crop-stage" id="cropStage">
+      <canvas id="cropCanvas"></canvas>
+      <svg id="cropOverlay" class="crop-overlay"></svg>
+    </div>
+    <p class="crop-hint">Drag the corners to the edges of the receipt</p>
+    <div class="crop-tools">
+      <button class="tool" id="autoBtn">Auto</button>
+      <button class="tool" id="fullBtn">Full</button>
+      <button class="tool" id="rotateBtn">Rotate</button>
+      <button class="tool" id="enhanceBtn" aria-pressed="true">Enhance</button>
+    </div>
+    <div class="bottom-bar dark">
+      <button class="btn ghost light" id="cropCancel">Cancel</button>
+      <button class="btn primary" id="cropDone">Use crop</button>
+    </div>
+  </section>
+
+  <!-- ===== Edit view ===== -->
+  <section id="editView" class="view" hidden>
+    <form id="editForm" class="form" autocomplete="off">
+      <div class="preview-wrap">
+        <img id="editPreview" alt="Cropped receipt">
+        <button type="button" class="btn small ghost" id="recropBtn">Re-crop</button>
+      </div>
+      <label class="field">
+        <span>What is it?</span>
+        <input name="description" required placeholder="e.g. Dinner at Nobu, Uber to airport">
+      </label>
+      <label class="field">
+        <span>What was it for?</span>
+        <textarea name="purpose" rows="2" placeholder="e.g. Client meeting with Acme – Q4 renewal"></textarea>
+      </label>
+      <div class="row">
+        <label class="field">
+          <span>Amount</span>
+          <input name="amount" inputmode="decimal" placeholder="0.00">
+        </label>
+        <label class="field">
+          <span>Date</span>
+          <input name="date" type="date">
+        </label>
+      </div>
+      <label class="field">
+        <span>Category</span>
+        <select name="category">
+          <option>Meals &amp; Entertainment</option>
+          <option>Travel – Air</option>
+          <option>Travel – Ground</option>
+          <option>Lodging</option>
+          <option>Fuel / Mileage</option>
+          <option>Office Supplies</option>
+          <option>Software / Subscriptions</option>
+          <option>Other</option>
+        </select>
+      </label>
+      <div class="bottom-bar">
+        <button type="button" class="btn ghost danger" id="deleteBtn" hidden>Delete</button>
+        <button type="button" class="btn ghost" id="editCancel">Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- ===== Settings view ===== -->
+  <section id="settingsView" class="view" hidden>
+    <form class="form" id="settingsForm" autocomplete="off">
+      <h3>You</h3>
+      <label class="field">
+        <span>Your name (shown on the report)</span>
+        <input name="name" placeholder="Michael Shaw">
+      </label>
+
+      <h3>Email recipients</h3>
+      <ul class="chips" id="emailList"></ul>
+      <div class="row">
+        <label class="field grow">
+          <span class="sr-only">Add email</span>
+          <input type="email" id="newEmail" placeholder="expenses@mentis.com">
+        </label>
+        <button type="button" class="btn" id="addEmailBtn">Add</button>
+      </div>
+
+      <h3>Branding</h3>
+      <div class="row">
+        <label class="btn">
+          Upload logo
+          <input type="file" id="logoInput" accept="image/*" hidden>
+        </label>
+        <button type="button" class="btn ghost" id="clearLogoBtn">Use text logo</button>
+      </div>
+      <div class="row">
+        <label class="field">
+          <span>Primary colour</span>
+          <input type="color" name="primary">
+        </label>
+        <label class="field">
+          <span>Accent colour</span>
+          <input type="color" name="accent">
+        </label>
+      </div>
+
+      <h3>Data</h3>
+      <p class="muted">Receipts are stored only on this phone, inside this browser.</p>
+      <div class="row">
+        <button type="button" class="btn ghost danger" id="clearSentBtn">Delete sent receipts</button>
+      </div>
+
+      <div class="bottom-bar">
+        <button type="button" class="btn primary" id="settingsDone">Done</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- ===== Send sheet ===== -->
+  <div class="sheet-backdrop" id="sendSheet" hidden>
+    <div class="sheet" role="dialog" aria-labelledby="sendTitle">
+      <h2 id="sendTitle">Send receipts</h2>
+      <p class="muted" id="sendSummary"></p>
+      <label class="field">
+        <span>Send to</span>
+        <select id="sendTo"></select>
+      </label>
+      <label class="field" id="sendToNewWrap" hidden>
+        <span>New email address</span>
+        <input type="email" id="sendToNew" placeholder="name@mentis.com">
+      </label>
+      <fieldset class="field">
+        <span>Attach as</span>
+        <label class="radio"><input type="radio" name="fmt" value="pdf" checked> One PDF expense report</label>
+        <label class="radio"><input type="radio" name="fmt" value="jpg"> Separate photos</label>
+      </fieldset>
+      <div class="row">
+        <button class="btn ghost" id="sendCancel">Cancel</button>
+        <button class="btn primary" id="sendGo">Send</button>
+      </div>
+      <p class="muted small" id="sendNote"></p>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+  <div class="busy" id="busy" hidden><div class="spinner"></div></div>
+
+  <script src="pdf.js"></script>
+  <script src="crop.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
