@@ -36,7 +36,7 @@
           workerPath: paths.workerPath, corePath: paths.corePath, langPath: paths.langPath,
         }))
         .then(async w => {
-          await w.setParameters({ tessedit_pageseg_mode: '4', preserve_interword_spaces: '1' }); // single column of text
+          await w.setParameters({ preserve_interword_spaces: '1' });
           return w;
         })
         .catch(err => { workerPromise = null; throw err; });
@@ -44,11 +44,39 @@
     return workerPromise;
   }
 
-  /** Run OCR on a canvas/image/blob; returns plain text. */
-  async function readText(image) {
+  /**
+   * Prepare a photo for reading: grey, a little extra contrast, and enlarged so small
+   * receipt print is about 30px tall (thermal receipts read far better this way).
+   */
+  function prepare(canvas) {
+    const s = Math.min(2.5, Math.max(1, 1600 / canvas.width));
+    const c = document.createElement('canvas');
+    c.width = Math.round(canvas.width * s); c.height = Math.round(canvas.height * s);
+    const x = c.getContext('2d');
+    x.imageSmoothingQuality = 'high';
+    x.filter = 'grayscale(1) contrast(1.6)';
+    x.drawImage(canvas, 0, 0, c.width, c.height);
+    return c;
+  }
+
+  /** Run OCR on a canvas; mode '6' = one block of text, '4' = column of lines. */
+  async function readText(canvas, mode = '6') {
     const worker = await getWorker();
-    const { data } = await worker.recognize(image);
+    await worker.setParameters({ tessedit_pageseg_mode: mode });
+    const { data } = await worker.recognize(prepare(canvas));
     return data.text || '';
+  }
+
+  /** Read the receipt; if the first pass misses the money lines, try a second layout and combine. */
+  async function readReceipt(canvas) {
+    let text = await readText(canvas, '6');
+    let r = parseReceipt(text);
+    if (r.method === 'none' || !r.gstFound) {
+      const more = await readText(canvas, '4');
+      const merged = parseReceipt(text + '\n' + more);
+      if (merged.total != null && (r.total == null || !r.gstFound)) { r = { ...merged, vendor: r.vendor || merged.vendor }; text += '\n' + more; }
+    }
+    return { text, ...r };
   }
 
   /* ---------------- Receipt parsing ---------------- */
@@ -98,8 +126,9 @@
   }
 
   const TOTAL_WORD = /\b(grand\s*total|tota[l1]|t0tal|amount\s*(due|payable|paid)|balance\s*due|to\s*pay|eftpos|visa|mastercard|amex|card|purchase)\b/i;
-  const SUBTOTAL_WORD = /\b(sub\s*-?\s*total|ex\.?\s*g\.?s\.?t|excl?\.?\s*g\.?s\.?t|excluding\s*g\.?s\.?t|before\s*g\.?s\.?t|pre\s*-?\s*g\.?s\.?t|net(\s*amount|\s*total)?)\b/i;
-  const GST_WORD = /\b(g\.?s\.?t|tax)\b/i;
+  const SUBTOTAL_WORD = /\b(sub\s*-?\s*total|ex\.?\s*g\.?s\.?t|excl?\.?\s*g\.?s\.?t|excluding\s*g\.?s\.?t|before\s*g\.?s\.?t|pre\s*-?\s*g\.?s\.?t|net(\s*amount|\s*tota[l1)]?)?)(\b|$)/i;
+  // GST label, allowing for common misreads like "G.5.T", "GEST", "G S T", or a "10%" rate.
+  const GST_WORD = /(\bg\s?\.?\s?[s5]\s?\.?\s?t\b|\bgest\b|\btax\b|\b10\s?%)/i;
   // Lines whose amounts are never the total: cash handed over, change, points, savings…
   const IGNORE_LINE = /\b(cash|tendered|change|rounding|savings?|saved|you\s*saved|discount|points|rewards?|tip|gift\s*card\s*bal)/i;
   const DATE_TIME = /\b\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}\b|\b\d{1,2}:\d{2}(:\d{2})?\b/g;
@@ -155,12 +184,25 @@
     }
     if (best) return { total: best.total, gst: best.gst, gstFound: true, method: 'sum' };
 
+    // 1b. Net + GST where GST is 10% of net (e.g. 62.73 + 6.27 = 69.00), even if the
+    //     total itself didn't read cleanly.
+    let pair = null;
+    for (const a of values) for (const b of values) {
+      if (b >= a || !near(b, a * 0.1, Math.max(0.02, a * 0.001))) continue;
+      if (!tagged(b, 'isGst') && !tagged(a, 'isSub')) continue;
+      const c = Math.round((a + b) * 100) / 100;
+      if (!pair || c > pair.total) pair = { total: c, gst: b };
+    }
+    const labelledTotals = amts.filter(x => x.isTotal).map(x => x.v);
+    if (pair && !labelledTotals.some(v => v > pair.total * 1.01)) return { total: pair.total, gst: pair.gst, gstFound: true, method: 'net+gst' };
+
     // 2. Highest dollar value – unless it looks like an OCR misread next to a labelled total.
     let total = values[0];
-    const labelled = amts.filter(a => a.isTotal).map(a => a.v);
-    if (labelled.length) {
-      const top = Math.max(...labelled);
-      if (total > top * 3) total = top;
+    if (labelledTotals.length && !labelledTotals.some(v => near(v, total))) {
+      const top = Math.max(...labelledTotals);
+      // A total printed on two or more TOTAL lines beats a stray bigger number (often a misread).
+      const repeated = labelledTotals.filter(v => near(v, top)).length >= 2;
+      if (repeated || total > top * 3) total = top;
     }
 
     // 3. GST line amount closest to 1/11 of the total.
@@ -230,7 +272,7 @@
     return '';
   }
 
-  const api = { readText, parseReceipt, guessCategory, gstFromTotal, round2, GST_RATE };
+  const api = { readText, readReceipt, parseReceipt, guessCategory, gstFromTotal, round2, GST_RATE };
   global.ReceiptOcr = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

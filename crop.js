@@ -26,59 +26,132 @@
       lum[i] = v;
       hist[v | 0]++;
     }
-    const thr = otsu(hist, lum.length);
-
-    // Bright mask, then close small gaps (receipt text) with a dilate + erode.
-    let mask = new Uint8Array(w * h);
-    for (let i = 0; i < mask.length; i++) mask[i] = lum[i] > thr ? 1 : 0;
-    mask = erode(dilate(mask, w, h, 2), w, h, 2);
-
-    // Largest connected bright region, preferring regions near the centre.
-    const label = new Int32Array(w * h).fill(-1);
-    const stack = new Int32Array(w * h);
-    let best = null;
-    for (let start = 0; start < mask.length; start++) {
-      if (!mask[start] || label[start] !== -1) continue;
-      let sp = 0, count = 0, touches = 0, cx = 0, cy = 0;
-      const id = start;
-      stack[sp++] = start; label[start] = id;
-      while (sp) {
-        const p = stack[--sp];
-        const x = p % w, y = (p / w) | 0;
-        count++; cx += x; cy += y;
-        if (x === 0 || y === 0 || x === w - 1 || y === h - 1) touches++;
-        if (x > 0 && mask[p - 1] && label[p - 1] === -1) { label[p - 1] = id; stack[sp++] = p - 1; }
-        if (x < w - 1 && mask[p + 1] && label[p + 1] === -1) { label[p + 1] = id; stack[sp++] = p + 1; }
-        if (y > 0 && mask[p - w] && label[p - w] === -1) { label[p - w] = id; stack[sp++] = p - w; }
-        if (y < h - 1 && mask[p + w] && label[p + w] === -1) { label[p + w] = id; stack[sp++] = p + w; }
-      }
-      cx /= count; cy /= count;
-      const dc = Math.hypot(cx / w - 0.5, cy / h - 0.5);
-      const score = count * (1 - dc) * (touches > (w + h) ? 0.5 : 1);
-      if (!best || score > best.score) best = { id, count, score };
-    }
-
     const fallback = insetQuad(W, H, 0.04);
-    if (!best || best.count < w * h * 0.06 || best.count > w * h * 0.97) return fallback;
 
-    // Extreme points of the region give the four corners.
-    let tl, tr, br, bl;
-    let sMin = Infinity, sMax = -Infinity, dMin = Infinity, dMax = -Infinity;
-    for (let p = 0; p < label.length; p++) {
-      if (label[p] !== best.id) continue;
-      const x = p % w, y = (p / w) | 0;
-      const s = x + y, d = x - y;
-      if (s < sMin) { sMin = s; tl = { x, y }; }
-      if (s > sMax) { sMax = s; br = { x, y }; }
-      if (d > dMax) { dMax = d; tr = { x, y }; }
-      if (d < dMin) { dMin = d; bl = { x, y }; }
+    // Two views of the photo, each tried at several cut-offs:
+    //  • plain brightness – works when the background is dark;
+    //  • brightness compared with the surrounding area – works on light tables, fabric
+    //    and uneven lighting/shadows, because paper is brighter than what's right next to it.
+    // Every candidate shape is scored on how four-sided it is, its size, and whether it
+    // runs off the edge of the photo; the best one wins.
+    const otsuT = otsu(hist, lum.length);
+    let acc = 0, p99 = 255;
+    for (let t = 0; t < 256; t++) { acc += hist[t]; if (acc >= lum.length * 0.99) { p99 = t; break; } }
+    const local = localContrast(lum, w, h, Math.round(Math.max(w, h) / 6));
+
+    const tries = [];
+    for (let t = Math.min(otsuT, p99 - 10); t < p99; t += 6) tries.push([lum, t]);
+    for (const t of [6, 10, 15, 20, 26, 34]) tries.push([local, t]);
+
+    let best = null;
+    const label = new Int32Array(w * h);
+    const stack = new Int32Array(w * h);
+    for (const [map, thr] of tries) {
+      let mask = new Uint8Array(w * h);
+      for (let i = 0; i < mask.length; i++) mask[i] = map[i] > thr ? 1 : 0;
+      mask = fillHoles(erode(dilate(mask, w, h, 2), w, h, 2), w, h, stack);
+      mask = dilate(erode(mask, w, h, 2), w, h, 2); // drop thin strands joining paper to background
+      label.fill(-1);
+      for (let start = 0; start < mask.length; start++) {
+        if (!mask[start] || label[start] !== -1) continue;
+        let sp = 0, count = 0, edge = 0;
+        stack[sp++] = start; label[start] = start;
+        let sMin = Infinity, sMax = -Infinity, dMin = Infinity, dMax = -Infinity, tl, tr, br, bl;
+        while (sp) {
+          const p = stack[--sp];
+          const x = p % w, y = (p / w) | 0;
+          count++;
+          if (x === 0 || y === 0 || x === w - 1 || y === h - 1) edge++;
+          const sum = x + y, dif = x - y;
+          if (sum < sMin) { sMin = sum; tl = { x, y }; }
+          if (sum > sMax) { sMax = sum; br = { x, y }; }
+          if (dif > dMax) { dMax = dif; tr = { x, y }; }
+          if (dif < dMin) { dMin = dif; bl = { x, y }; }
+          if (x > 0 && mask[p - 1] && label[p - 1] === -1) { label[p - 1] = start; stack[sp++] = p - 1; }
+          if (x < w - 1 && mask[p + 1] && label[p + 1] === -1) { label[p + 1] = start; stack[sp++] = p + 1; }
+          if (y > 0 && mask[p - w] && label[p - w] === -1) { label[p - w] = start; stack[sp++] = p - w; }
+          if (y < h - 1 && mask[p + w] && label[p + w] === -1) { label[p + w] = start; stack[sp++] = p + w; }
+        }
+        const frac = count / (w * h);
+        if (frac < 0.04 || frac > 0.95) continue;
+        const quad = [tl, tr, br, bl];
+        const qa = polyArea(quad);
+        if (qa < 1) continue;
+        const fill = Math.min(1, count / qa);          // 1.0 = cleanly four-sided
+        if (fill < 0.75) continue;
+        const edgeShare = edge / (2 * (w + h));          // how much it runs off the photo
+        // Paper should be bright overall, not just a lit patch.
+        let bright = 0;
+        for (let i = 0; i < mask.length; i++) if (label[i] === start) bright += lum[i];
+        bright /= count * 255;
+        // A receipt is a rectangle (allowing for camera tilt): corners near 90°.
+        const square = squareness(quad);
+        const score = Math.pow(fill, 4) * Math.sqrt(frac) * bright * square * (1 - Math.min(0.9, edgeShare * 4));
+        if (!best || score > best.score) best = { score, quad };
+      }
     }
-    const quad = [tl, tr, br, bl].map(p => ({
+    if (!best) return fallback;
+
+    const quad = best.quad.map(p => ({
       x: Math.min(W, Math.max(0, (p.x + 0.5) / scale)),
       y: Math.min(H, Math.max(0, (p.y + 0.5) / scale)),
     }));
-    if (polyArea(quad) < W * H * 0.05) return fallback;
+    if (polyArea(quad) < W * H * 0.04) return fallback;
     return quad;
+  }
+
+  /** 1 for a perfect rectangle, falling towards 0 as any corner moves away from 90°. */
+  function squareness(q) {
+    let worst = 0;
+    for (let i = 0; i < 4; i++) {
+      const p = q[i], a = q[(i + 3) % 4], b = q[(i + 1) % 4];
+      const ux = a.x - p.x, uy = a.y - p.y, vx = b.x - p.x, vy = b.y - p.y;
+      const len = Math.hypot(ux, uy) * Math.hypot(vx, vy);
+      if (!len) return 0;
+      const deg = Math.acos(Math.max(-1, Math.min(1, (ux * vx + uy * vy) / len))) * 180 / Math.PI;
+      worst = Math.max(worst, Math.abs(90 - deg));
+    }
+    return Math.max(0.05, 1 - Math.pow(worst / 45, 2));
+  }
+
+  /** Brightness minus the average brightness of the surrounding area (radius r). */
+  function localContrast(lum, w, h, r) {
+    const integ = new Float64Array((w + 1) * (h + 1));
+    for (let y = 0; y < h; y++) {
+      let row = 0;
+      for (let x = 0; x < w; x++) {
+        row += lum[y * w + x];
+        integ[(y + 1) * (w + 1) + x + 1] = integ[y * (w + 1) + x + 1] + row;
+      }
+    }
+    const out = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1);
+      const y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
+      const sum = integ[y1 * (w + 1) + x1] - integ[y0 * (w + 1) + x1] - integ[y1 * (w + 1) + x0] + integ[y0 * (w + 1) + x0];
+      out[y * w + x] = lum[y * w + x] - sum / ((x1 - x0) * (y1 - y0));
+    }
+    return out;
+  }
+
+  /** Fill enclosed gaps (e.g. printed text) inside bright shapes. */
+  function fillHoles(mask, w, h, stack) {
+    const outside = new Uint8Array(w * h);
+    let sp = 0;
+    const push = p => { if (!mask[p] && !outside[p]) { outside[p] = 1; stack[sp++] = p; } };
+    for (let x = 0; x < w; x++) { push(x); push((h - 1) * w + x); }
+    for (let y = 0; y < h; y++) { push(y * w); push(y * w + w - 1); }
+    while (sp) {
+      const p = stack[--sp];
+      const x = p % w, y = (p / w) | 0;
+      if (x > 0) push(p - 1);
+      if (x < w - 1) push(p + 1);
+      if (y > 0) push(p - w);
+      if (y < h - 1) push(p + w);
+    }
+    const out = new Uint8Array(w * h);
+    for (let i = 0; i < out.length; i++) out[i] = outside[i] ? 0 : 1;
+    return out;
   }
 
   function otsu(hist, total) {

@@ -5,7 +5,7 @@ A phone app for work receipts. It runs in the browser and needs no install, acco
 1. **Snap** a receipt with the camera, or pick a photo from your library.
 2. **Crop**: the app finds the receipt's edges and straightens it. You can drag the corners to adjust. **Enhance** turns it into a clean black-and-white scan.
 3. **Read**: the app reads the receipt on the phone and fills in the **vendor**, **total**, **GST** and **date**. Check them and fix anything it got wrong (**Read again** re-scans).
-4. **Note** what it is and what it was for. The **expense type** is guessed from the receipt (fuel, parking, meals, travel…). Pick another from the list, or choose **Type your own…** to add a new type; your own types are remembered and can be removed in Settings.
+4. **Note** what it is and what it was for. The **expense type** is guessed from the receipt (fuel, parking, meals, travel…). Pick another from the list, or choose **Not listed – type it in…** to type your own when nothing fits.
 5. **Send**: tick the receipts you want, pick a saved email address, and send them as **one PDF expense report** (a summary page plus one page per receipt) or as separate photos.
 
 Receipts are kept **only on your phone**, in the browser's storage. Sent receipts move to the **Sent** tab. You can delete them from Settings.
@@ -14,7 +14,7 @@ Receipts are kept **only on your phone**, in the browser's storage. Sent receipt
 
 | Field | How it's worked out |
 | --- | --- |
-| Total (inc GST) | The receipt's own arithmetic first: if three figures fit **ex-GST + GST = total** (e.g. 83.25 + 8.32 = 91.57), that total is used. Otherwise it's the **highest dollar value** on the receipt, ignoring cash handed over, change, points and savings. You can type over it. |
+| Total (inc GST) | The receipt's own arithmetic first: if three figures fit **ex-GST + GST = total** (e.g. 83.25 + 8.32 = 91.57), that total is used. Failing that, a net/ex-GST figure plus a GST figure of 10% of it (e.g. 62.73 + 6.27 = 69.00). Otherwise it's the **highest dollar value** on the receipt, ignoring cash handed over, change, points and savings. You can type over it. |
 | GST | The GST figure from that sum, or the amount on a GST line closest to 1/11 of the total, otherwise **1/11 of the total** (10% GST). Type over it to override. |
 | Ex GST | Always **Total − GST**, recalculated automatically. |
 

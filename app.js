@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '4';
+  const APP_VERSION = '5';
 
   /* ---------------- Storage ---------------- */
   const db = (() => {
@@ -33,7 +33,7 @@
   })();
 
   const SETTINGS_KEY = 'mentis-expenses-settings';
-  const defaults = { name: '', emails: [], customCategories: [], lastEmail: '', logo: '', primary: '#0b2a4a', accent: '#00a6a6', enhance: true };
+  const defaults = { name: '', emails: [], lastEmail: '', logo: '', primary: '#0b2a4a', accent: '#00a6a6', enhance: true };
   let settings = load();
   function load() {
     try { return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
@@ -318,7 +318,8 @@
       Object.assign(editing, { image, thumb, original, quad: quad.map(p => ({ ...p })), w: out.width, h: out.height });
       fillEdit();
       show('editView');
-      readReceipt(out, { overwrite: false });
+      // Read from an un-enhanced copy: black-and-white enhancing wipes out faded thermal print.
+      readReceipt(ReceiptCrop.warp(work, quad, { maxSide: 2400, enhance: false }), { overwrite: false });
     } catch (err) {
       console.error(err);
       toast('Crop failed – try again.');
@@ -393,10 +394,9 @@
     $('ocrMsg').textContent = 'Reading receipt…';
     $('ocrAgainBtn').hidden = true;
     try {
-      const text = await ReceiptOcr.readText(image);
+      const r = await ReceiptOcr.readReceipt(image);
       if (run !== ocrRun || !editing || editing.id !== id || $('editView').hidden) return;
-      const r = ReceiptOcr.parseReceipt(text);
-      editing.ocrText = text;
+      editing.ocrText = r.text;
       if (r.abn) editing.abn = r.abn;
       const f = $('editForm');
       const filled = [];
@@ -430,7 +430,15 @@
       if (run === ocrRun) $('ocrAgainBtn').hidden = false;
     }
   }
-  $('ocrAgainBtn').onclick = () => { if (editing && editing.image) readReceipt(editing.image, { overwrite: true }); };
+  $('ocrAgainBtn').onclick = async () => {
+    if (!editing || !editing.image) return;
+    try {
+      const canvas = editing.original && editing.quad
+        ? ReceiptCrop.warp(await fileToCanvas(editing.original), editing.quad, { maxSide: 2400, enhance: false })
+        : await fileToCanvas(editing.image);
+      readReceipt(canvas, { overwrite: true });
+    } catch (err) { console.error(err); toast('Couldn’t open the photo to read it.'); }
+  };
 
   function captureForm() {
     const f = $('editForm');
@@ -446,43 +454,33 @@
     });
   }
 
-  /* ----- Expense type: fixed list + your own typed types ----- */
+  /* ----- Expense type: preset list, plus free text when nothing fits ----- */
   const CATEGORIES = [
-    'Meals & Entertainment', 'Staff Amenities', 'Parking', 'Fuel', 'Travel – Air', 'Travel – Ground',
-    'Lodging', 'Office Supplies', 'Software / Subscriptions', 'Other',
+    'Meals & Entertainment', 'Staff Amenities', 'Parking', 'Fuel', 'Fuel / Mileage',
+    'Travel – Air', 'Travel – Ground', 'Lodging', 'Office Supplies', 'Software / Subscriptions', 'Other',
   ];
   const CUSTOM = '__custom';
   let categoryTouched = false;
 
   function setCategory(value) {
     const sel = $('categorySelect');
-    const mine = settings.customCategories.filter(c => !CATEGORIES.includes(c));
-    if (value && !CATEGORIES.includes(value) && !mine.includes(value)) mine.unshift(value);
-    sel.innerHTML = '';
-    sel.add(new Option('Choose expense type…', ''));
-    CATEGORIES.forEach(c => sel.add(new Option(c, c)));
-    if (mine.length) {
-      const group = document.createElement('optgroup');
-      group.label = 'Your types';
-      mine.forEach(c => group.appendChild(new Option(c, c)));
-      sel.appendChild(group);
+    if (sel.options.length !== CATEGORIES.length + 2) {
+      sel.innerHTML = '';
+      sel.add(new Option('Choose expense type…', ''));
+      CATEGORIES.forEach(c => sel.add(new Option(c, c)));
+      sel.add(new Option('✎ Not listed – type it in…', CUSTOM));
     }
-    sel.add(new Option('✎ Type your own…', CUSTOM));
-    sel.value = value || '';
-    $('customCategoryWrap').hidden = true;
-    $('customCategory').value = '';
+    const isPreset = !value || CATEGORIES.includes(value);
+    sel.value = isPreset ? (value || '') : CUSTOM;
+    $('customCategoryWrap').hidden = isPreset;
+    $('customCategory').value = isPreset ? '' : value;
   }
 
   function readCategory() {
     const sel = $('categorySelect');
     if (sel.value !== CUSTOM) return sel.value;
     const typed = $('customCategory').value.trim().replace(/\s+/g, ' ');
-    if (!typed) return '';
-    const known = CATEGORIES.find(c => c.toLowerCase() === typed.toLowerCase());
-    if (known) return known;
-    settings.customCategories = [typed, ...settings.customCategories.filter(c => c.toLowerCase() !== typed.toLowerCase())].slice(0, 12);
-    saveSettings();
-    return typed;
+    return CATEGORIES.find(c => c.toLowerCase() === typed.toLowerCase()) || typed;
   }
 
   $('categorySelect').addEventListener('change', e => {
@@ -544,22 +542,7 @@
       ul.appendChild(li);
     });
   }
-  function renderCustomCats() {
-    const ul = $('customCatList');
-    ul.innerHTML = settings.customCategories.length ? '' : '<li class="muted">Types you type in yourself appear here.</li>';
-    settings.customCategories.forEach((c, i) => {
-      const li = document.createElement('li');
-      li.innerHTML = `<span>${escapeHtml(c)}</span><button type="button" data-i="${i}">Remove</button>`;
-      ul.appendChild(li);
-    });
-  }
-  $('customCatList').addEventListener('click', e => {
-    const i = e.target.dataset.i;
-    if (i == null) return;
-    settings.customCategories.splice(Number(i), 1);
-    saveSettings(); renderCustomCats();
-  });
-  $('settingsBtn').onclick = () => { renderSettings(); renderCustomCats(); show('settingsView'); };
+  $('settingsBtn').onclick = () => { renderSettings(); show('settingsView'); };
   $('settingsDone').onclick = () => {
     settings.name = $('settingsForm').name.value.trim();
     saveSettings();

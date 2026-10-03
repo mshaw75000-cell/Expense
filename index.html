@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
   <header class="topbar">
@@ -124,10 +124,24 @@
       </label>
       <label class="field">
         <span>Expense type</span>
-        <select name="category" id="categorySelect"></select>
+        <select name="category" id="categorySelect">
+          <option value="">Choose expense type…</option>
+          <option>Meals &amp; Entertainment</option>
+          <option>Staff Amenities</option>
+          <option>Parking</option>
+          <option>Fuel</option>
+          <option>Fuel / Mileage</option>
+          <option>Travel – Air</option>
+          <option>Travel – Ground</option>
+          <option>Lodging</option>
+          <option>Office Supplies</option>
+          <option>Software / Subscriptions</option>
+          <option>Other</option>
+          <option value="__custom">✎ Not listed – type it in…</option>
+        </select>
       </label>
       <label class="field" id="customCategoryWrap" hidden>
-        <span>Type your own expense type</span>
+        <span>Expense type (type it in)</span>
         <input name="customCategory" id="customCategory" placeholder="e.g. Conference fees, Tolls, Gifts" maxlength="40">
       </label>
       <div class="bottom-bar">
@@ -156,9 +170,6 @@
         </label>
         <button type="button" class="btn" id="addEmailBtn">Add</button>
       </div>
-
-      <h3>Your expense types</h3>
-      <ul class="chips" id="customCatList"></ul>
 
       <h3>Branding</h3>
       <div class="row">
@@ -221,9 +232,9 @@
   <div class="toast" id="toast" hidden></div>
   <div class="busy" id="busy" hidden><div class="spinner"></div></div>
 
-  <script src="ocr.js"></script>
-  <script src="pdf.js"></script>
-  <script src="crop.js"></script>
-  <script src="app.js"></script>
+  <script src="ocr.js?v=5"></script>
+  <script src="pdf.js?v=5"></script>
+  <script src="crop.js?v=5"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>
