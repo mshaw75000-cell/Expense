@@ -223,12 +223,20 @@
         if (mo > 12 && d <= 12) [d, mo] = [mo, d];
         if (d >= 1 && d <= 31 && mo >= 1 && mo <= 12 && y >= 2000 && y <= 2100) return iso(y, mo, d);
       }
-      m = /\b(\d{1,2})\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*(\d{2,4})\b/i.exec(l);
+      m = /\b(\d{1,2})(?:st|nd|rd|th)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?\s*(\d{2,4})\b/i.exec(l);
       if (m) {
         let y = Number(m[3]); if (y < 100) y += 2000;
         const mo = 'janfebmaraprmayjunjulaugsepoctnovdec'.indexOf(m[2].toLowerCase()) / 3 + 1;
         return iso(y, mo, Number(m[1]));
       }
+      // Emails: "October 3, 2026", "Oct 3 2026"
+      m = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b/i.exec(l);
+      if (m) {
+        const mo = 'janfebmaraprmayjunjulaugsepoctnovdec'.indexOf(m[1].toLowerCase()) / 3 + 1;
+        return iso(Number(m[3]), mo, Number(m[2]));
+      }
+      m = /\b(20\d{2})-(\d{2})-(\d{2})\b/.exec(l);
+      if (m) return iso(+m[1], +m[2], +m[3]);
     }
     return '';
   }
@@ -244,7 +252,7 @@
     const lines = String(text).split(/\r?\n/).map(cleanLine).filter(Boolean);
     const { total, gst, gstFound, method } = findAmounts(lines);
     return {
-      vendor: findVendor(lines),
+      vendor: knownBrand(lines) || findVendor(lines),
       total: total != null ? round2(total) : null,
       gst: gstFound ? round2(gst) : (total != null ? gstFromTotal(total) : null),
       gstFound,
@@ -255,8 +263,26 @@
     };
   }
 
+  /* ---------------- Well-known senders (emails, PDF receipts) ---------------- */
+  // Email and PDF receipts often bury the business name, so look for these first.
+  const BRANDS = [
+    ['Uber Eats', /\buber\s*eats\b/i], ['DoorDash', /\bdoor\s*dash\b/i], ['Menulog', /\bmenulog\b/i], ['Deliveroo', /\bdeliveroo\b/i],
+    ['Uber', /\buber\b/i], ['DiDi', /\bdidi\b/i], ['Ola', /\bola\s*(cabs|money)?\b(?=.*(ride|trip))/i], ['13cabs', /\b13\s*cabs\b/i],
+    ['Qantas', /\bqantas\b/i], ['Virgin Australia', /\bvirgin\s*australia\b/i], ['Jetstar', /\bjetstar\b/i], ['Rex Airlines', /\brex\s*airlines\b/i],
+    ['Airbnb', /\bairbnb\b/i], ['Booking.com', /\bbooking\.com\b/i], ['Expedia', /\bexpedia\b/i], ['Hotels.com', /\bhotels\.com\b/i],
+    ['Amazon', /\bamazon(\.com)?(\.au)?\b/i], ['Officeworks', /\bofficeworks\b/i], ['Bunnings', /\bbunnings\b/i],
+    ['Linkt', /\blinkt\b/i], ['Wilson Parking', /\bwilson\s*parking\b/i], ['Secure Parking', /\bsecure\s*parking\b/i],
+    ['Microsoft', /\bmicrosoft\b/i], ['Adobe', /\badobe\b/i], ['Google', /\bgoogle\s*(workspace|cloud|payments)\b/i],
+  ];
+  function knownBrand(lines) {
+    const head = lines.slice(0, 25).join('\n');
+    for (const [name, re] of BRANDS) if (re.test(head)) return name;
+    return '';
+  }
+
   /* ---------------- Expense type guess ---------------- */
   const CATEGORY_HINTS = [
+    ['Meals & Entertainment', /\b(uber\s*eats|doordash|menulog|deliveroo|eatclub|hungry\s*panda)\b/i],
     ['Parking', /\b(parking|car\s*park|carpark|wilson|secure\s*parking|care\s*park|first\s*parking|entry\s*time|exit\s*time|park\s*fee)\b/i],
     ['Fuel', /\b(unleaded|diesel|e10|ulp|premium\s*9[58]|vortex|v-?power|fuel|petrol|litres?|ampol|caltex|shell|bp\b|7-?eleven|united\s*petroleum|puma\s*energy|liberty\s*oil|metro\s*petroleum|\d+(\.\d+)?\s*l\s*@)/i],
     ['Travel – Air', /\b(qantas|virgin\s*australia|jetstar|rex\s*airlines|airline|flight|boarding\s*pass)\b/i],

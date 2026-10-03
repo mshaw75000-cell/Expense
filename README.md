@@ -8,6 +8,15 @@ A phone app for work receipts. It runs in the browser and needs no install, acco
 4. **Complete**: add what it was for, choose the **business unit** (Mentis or Macrack), and add any **supporting photos** (invoice, booking confirmation, attendee list…).
 5. **Submit monthly**: receipts are grouped by the month of their date. Each month is one claim; tap **Submit claim** to email accounts a **PDF** (summary by business unit, every receipt and supporting photo) and an **Excel spreadsheet** of every line.
 
+**PDFs and emails.** Tap **Add other ways** for more options:
+
+- **PDF receipt or invoice** – Uber, airline, hotel and supplier PDFs. The text is read straight out of the PDF (scanned PDFs are read like a photo); page 1 becomes the receipt image and up to 3 more pages are added as supporting documents.
+- **Paste an email** – copy the text of an Uber, Uber Eats, DoorDash or similar email receipt and paste it in. The vendor, total, GST and date are read from it, and a receipt-style image of the email is kept for the claim report.
+- **Email or text file** – a saved .eml, .html or .txt receipt.
+- **Share from another app (Android)** – in Outlook or Gmail, use **Share** on an email or a PDF attachment and pick **Expenses**. (After this update the app may need reinstalling from Chrome – ⋮ → Install app – before it shows in the share list.)
+
+A claim started with **No receipt yet** can also have its receipt added later as a PDF.
+
 **No receipt yet?** Tap **No receipt yet** to start the claim with just the details (vendor, total, date, unit, purpose). It shows as *Receipt to follow*; open it any time and tap **Take photo** or **Choose photo** to add the receipt – the reader fills in anything still blank. You can submit a month with receipts still to follow (you'll be asked to confirm); they're marked *Receipt to follow* in the PDF and spreadsheet, and adding the photo later reopens the claim and appears on the exception report as "Receipt photo added". **Add claim** in Reconciliation also creates one of these, filled in from the bank line.
 
 Receipts are kept **only on your phone**, in the browser's storage.
@@ -88,6 +97,7 @@ To change the default colours for everyone, edit `--primary` and `--accent` at t
 | `app.js` | Screens, storage, sending |
 | `crop.js` | Receipt edge detection, perspective straightening, enhance |
 | `ocr.js` | Receipt reading: vendor, total, GST, date, ABN |
+| `docimport.js` | Reading PDFs (PDF.js) and email text |
 | `pdf.js` | Builds the PDF claim report (no external libraries) |
 | `xlsx.js` | Builds the Excel spreadsheets (no external libraries) |
 | `recon.js` | Reads bank statements and matches them to claims |

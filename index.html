@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=10">
+  <link rel="stylesheet" href="styles.css?v=11">
 </head>
 <body>
   <header class="topbar">
@@ -20,7 +20,7 @@
       <img id="brandLogo" alt="" hidden>
       <span id="brandWord" class="wordmark">mentis</span>
     </div>
-    <div class="topbar-title" id="viewTitle">Receipts</div>
+    <div class="topbar-title" id="viewTitle">Claims</div>
     <button class="icon-btn" id="reconBtn" aria-label="Reconcile bank statement" title="Reconcile">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h18M5 10V20M19 10V20M9 10v10M15 10v10M2 20h20M12 3l9 5H3z"/></svg>
     </button>
@@ -41,17 +41,13 @@
       <p>No receipts here yet.</p>
       <p class="muted">Tap the camera button to snap one.</p>
     </div>
-    <button type="button" class="pill-fab" id="noReceiptBtn">
+    <button type="button" class="pill-fab" id="addMenuBtn">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      No receipt yet
+      Add other ways
     </button>
     <label class="fab" aria-label="Take photo of receipt">
       <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-    </label>
-    <label class="fab fab-secondary" aria-label="Choose from photo library">
-      <input type="file" id="libraryInput" accept="image/*" hidden>
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
     </label>
   </main>
 
@@ -89,7 +85,7 @@
           <p class="muted small">Add the photo now or any time later.</p>
           <div class="row no-receipt-btns" id="addReceiptBtns">
             <label class="btn primary">Take photo<input type="file" id="receiptCam" accept="image/*" capture="environment" hidden></label>
-            <label class="btn ghost">Choose photo<input type="file" id="receiptLib" accept="image/*" hidden></label>
+            <label class="btn ghost">Photo or PDF<input type="file" id="receiptLib" accept="image/*,application/pdf,.pdf" hidden></label>
           </div>
         </div>
         <button type="button" class="btn small ghost" id="recropBtn">Re-crop</button>
@@ -255,6 +251,47 @@
     </div>
   </div>
 
+  <!-- ===== Add menu ===== -->
+  <div class="sheet-backdrop" id="addSheet" hidden>
+    <div class="sheet add-menu" role="dialog" aria-label="Add a claim">
+      <h2>Add a claim</h2>
+      <label class="add-opt">
+        <span class="add-ico">🖼️</span><span><strong>Photo from library</strong><small>A receipt photo or screenshot</small></span>
+        <input type="file" id="libraryInput" accept="image/*" hidden>
+      </label>
+      <label class="add-opt">
+        <span class="add-ico">📄</span><span><strong>PDF receipt or invoice</strong><small>Uber, Qantas, hotel and supplier invoices…</small></span>
+        <input type="file" id="pdfInput" accept="application/pdf,.pdf" hidden>
+      </label>
+      <button type="button" class="add-opt" id="pasteOpt">
+        <span class="add-ico">✉️</span><span><strong>Paste an email</strong><small>Uber, Uber Eats, DoorDash and other email receipts</small></span>
+      </button>
+      <label class="add-opt">
+        <span class="add-ico">📧</span><span><strong>Email or text file</strong><small>A saved .eml, .html or .txt receipt</small></span>
+        <input type="file" id="emailFileInput" accept=".eml,.html,.htm,.txt,.mht,message/rfc822,text/plain,text/html" hidden>
+      </label>
+      <button type="button" class="add-opt" id="noReceiptBtn">
+        <span class="add-ico">✍️</span><span><strong>No receipt yet</strong><small>Enter the details now, add the receipt later</small></span>
+      </button>
+      <p class="muted small">Tip: on Android you can also <strong>Share</strong> an email or PDF from Outlook or Gmail straight to Mentis Expenses.</p>
+      <button type="button" class="btn ghost" id="addCancel">Cancel</button>
+    </div>
+  </div>
+
+  <!-- ===== Paste email sheet ===== -->
+  <div class="sheet-backdrop" id="pasteSheet" hidden>
+    <div class="sheet" role="dialog" aria-labelledby="pasteTitle">
+      <h2 id="pasteTitle">Paste an email receipt</h2>
+      <p class="muted small">In your email app, open the receipt, select all the text and copy it, then paste it here.</p>
+      <textarea id="pasteText" rows="9" placeholder="e.g. Here's your receipt for your ride… Total A$23.45…"></textarea>
+      <div class="row">
+        <button type="button" class="btn ghost" id="pasteFromClipboard">Paste</button>
+        <button type="button" class="btn ghost" id="pasteCancel">Cancel</button>
+        <button type="button" class="btn primary" id="pasteGo">Create claim</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ===== Send sheet ===== -->
   <div class="sheet-backdrop" id="sendSheet" hidden>
     <div class="sheet" role="dialog" aria-labelledby="sendTitle">
@@ -290,11 +327,12 @@
   <div class="toast" id="toast" hidden></div>
   <div class="busy" id="busy" hidden><div class="spinner"></div></div>
 
-  <script src="ocr.js?v=10"></script>
-  <script src="pdf.js?v=10"></script>
-  <script src="xlsx.js?v=10"></script>
-  <script src="recon.js?v=10"></script>
-  <script src="crop.js?v=10"></script>
-  <script src="app.js?v=10"></script>
+  <script src="ocr.js?v=11"></script>
+  <script src="pdf.js?v=11"></script>
+  <script src="xlsx.js?v=11"></script>
+  <script src="recon.js?v=11"></script>
+  <script src="crop.js?v=11"></script>
+  <script src="docimport.js?v=11"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>

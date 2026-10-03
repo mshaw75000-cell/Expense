@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '10';
+  const APP_VERSION = '11';
   const UNITS = ['Mentis', 'Macrack'];
 
   /* ---------------- Storage ---------------- */
@@ -269,12 +269,123 @@
     show('editView');
     $('editForm').vendor.focus();
   }
-  $('noReceiptBtn').onclick = startWithoutReceipt;
+  $('noReceiptBtn').onclick = () => { closeAdd(); startWithoutReceipt(); };
+
+  /* ---------------- PDFs and emails ---------------- */
+  const isPdf = f => f && (f.type === 'application/pdf' || /\.pdf$/i.test(f.name || ''));
+  const openAdd = () => { $('addSheet').hidden = false; };
+  const closeAdd = () => { $('addSheet').hidden = true; };
+  $('addMenuBtn').onclick = openAdd;
+  $('addCancel').onclick = closeAdd;
+  $('addSheet').addEventListener('click', e => { if (e.target === $('addSheet')) closeAdd(); });
+
+  /** Receipt image + thumbnail blobs from a canvas. */
+  async function imagesFrom(canvas) {
+    const s = Math.min(1, 1800 / Math.max(canvas.width, canvas.height));
+    const out = document.createElement('canvas');
+    out.width = Math.round(canvas.width * s); out.height = Math.round(canvas.height * s);
+    out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
+    const t = document.createElement('canvas');
+    const ts = 240 / Math.max(out.width, out.height);
+    t.width = Math.round(out.width * ts); t.height = Math.round(out.height * ts);
+    t.getContext('2d').drawImage(out, 0, 0, t.width, t.height);
+    const [image, thumb] = await Promise.all([toBlob(out, 'image/jpeg', 0.85), toBlob(t, 'image/jpeg', 0.8)]);
+    return { image, thumb, w: out.width, h: out.height };
+  }
+
+  /** New claim (or the receipt for an existing one) from a PDF – reads its text; scanned PDFs are OCR'd. */
+  async function importPdf(file, { into = null } = {}) {
+    closeAdd();
+    busy(true);
+    try {
+      const { text, pages, pageCount } = await DocImport.readPdf(file);
+      if (!pages.length) throw new Error('empty PDF');
+      const imgs = await imagesFrom(pages[0]);
+      const extra = [];
+      for (const p of pages.slice(1)) { const x = await imagesFrom(p); extra.push({ id: uid(), blob: x.image, w: x.w, h: x.h }); }
+      const wasImage = into && into.image;
+      editing = into || newRecord();
+      if (!editing.isNew && wasImage) editing.imageVer = (editing.imageVer || 0) + 1;
+      Object.assign(editing, imgs, { original: null, quad: null, source: 'PDF', sourceName: file.name });
+      editing.attachments = [...extra, ...(editing.attachments || [])];
+      const readable = (text.match(/[a-z]{3,}/gi) || []).length > 5 && /\d/.test(text);
+      editing.sourceText = readable ? text : '';
+      await fillEdit();
+      show('editView');
+      if (readable) applyParsed(ReceiptOcr.parseReceipt(text), { overwrite: false, from: 'PDF' });
+      else readReceipt(pages[0], { overwrite: false }); // scanned PDF – read the page image
+      if (pageCount > pages.length) toast(`PDF has ${pageCount} pages – the first ${pages.length} are kept.`, 4000);
+      else if (extra.length) toast(`${plural(extra.length, 'more page')} added as supporting documents.`, 3500);
+    } catch (err) {
+      console.error(err);
+      toast(/offline|load the PDF/i.test(err.message) ? err.message : 'Couldn’t read that PDF.', 4500);
+    } finally { busy(false); }
+  }
+  $('pdfInput').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) importPdf(f); });
+
+  /** New claim from email text: reads the details and keeps a receipt-style image of the text. */
+  async function importText(raw, { title = 'Email receipt', name = '' } = {}) {
+    const text = DocImport.cleanEmailText(raw);
+    if (!/\d/.test(text) || text.length < 15) return toast('That doesn’t look like a receipt – nothing with an amount in it.', 4000);
+    busy(true);
+    try {
+      const imgs = await imagesFrom(DocImport.textToImage(text, { title: name ? `${title} – ${name}` : title }));
+      editing = newRecord();
+      Object.assign(editing, imgs, { original: null, quad: null, source: 'email', sourceText: text });
+      await fillEdit();
+      show('editView');
+      applyParsed(ReceiptOcr.parseReceipt(text), { overwrite: false, from: 'email' });
+    } finally { busy(false); }
+  }
+  $('pasteOpt').onclick = () => { closeAdd(); $('pasteText').value = ''; $('pasteSheet').hidden = false; setTimeout(() => $('pasteText').focus(), 50); };
+  $('pasteCancel').onclick = () => { $('pasteSheet').hidden = true; };
+  $('pasteFromClipboard').onclick = async () => {
+    try { $('pasteText').value = await navigator.clipboard.readText(); }
+    catch { toast('Couldn’t read the clipboard – press and hold in the box and choose Paste.', 4000); }
+  };
+  $('pasteGo').onclick = () => {
+    const t = $('pasteText').value;
+    if (!t.trim()) return toast('Paste the email text first.');
+    $('pasteSheet').hidden = true;
+    importText(t);
+  };
+  $('emailFileInput').addEventListener('change', async e => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    closeAdd();
+    importText(await f.text(), { title: 'Email receipt', name: f.name });
+  });
+
+  /** Things shared to the app from other apps (Android share menu) arrive via the service worker. */
+  async function handleShared() {
+    if (!/[?&]shared=1/.test(location.search)) return;
+    history.replaceState(null, '', location.pathname);
+    try {
+      const cache = await caches.open('share-inbox');
+      const metaRes = await cache.match('share-meta');
+      if (!metaRes) return;
+      const meta = await metaRes.json();
+      const files = [];
+      for (let i = 0; i < meta.files.length; i++) {
+        const r = await cache.match(`share-file-${i}`);
+        if (r) files.push(new File([await r.blob()], meta.files[i].name, { type: meta.files[i].type }));
+      }
+      await Promise.all([cache.delete('share-meta'), ...meta.files.map((_, i) => cache.delete(`share-file-${i}`))]);
+      const pdf = files.find(isPdf), img = files.find(f => /^image\//.test(f.type)), txt = files.find(f => /^text\/|message\/rfc822|\.eml$/i.test(f.type + ' ' + f.name));
+      if (pdf) return importPdf(pdf);
+      if (img) return onPhoto(img);
+      if (txt) return importText(await txt.text(), { name: txt.name });
+      const text = [meta.title, meta.text, meta.url].filter(Boolean).join('\n');
+      if (text.trim()) return importText(text);
+      toast('Nothing usable was shared.');
+    } catch (err) { console.error(err); toast('Couldn’t open what was shared.'); }
+  }
 
   /** Add the receipt photo to a claim that was started without one. */
   async function attachReceipt(file) {
     if (!file || !editing) return;
     captureForm(); // keep what's been typed
+    if (isPdf(file)) return importPdf(file, { into: editing });
     cropFromEdit = true;
     busy(true);
     try { startCrop(await fileToCanvas(file), null); }
@@ -437,7 +548,7 @@
       t.getContext('2d').drawImage(out, 0, 0, t.width, t.height);
       const [image, thumb, original] = await Promise.all([toBlob(out, 'image/jpeg', 0.85), toBlob(t, 'image/jpeg', 0.8), toBlob(work, 'image/jpeg', 0.85)]);
       if (!editing.isNew && editing.image) editing.imageVer = (editing.imageVer || 0) + 1;
-      Object.assign(editing, { image, thumb, original, quad: quad.map(p => ({ ...p })), w: out.width, h: out.height });
+      Object.assign(editing, { image, thumb, original, quad: quad.map(p => ({ ...p })), w: out.width, h: out.height, source: 'photo', sourceText: '' });
       await fillEdit();
       show('editView');
       // Read from an un-enhanced copy: black-and-white enhancing wipes out faded thermal print.
@@ -547,6 +658,22 @@
       const r = await ReceiptOcr.readReceipt(image);
       if (run !== ocrRun || !editing || editing.id !== id || $('editView').hidden) return;
       editing.ocrText = r.text;
+      applyParsed(r, { overwrite });
+    } catch (err) {
+      console.error(err);
+      if (run !== ocrRun) return;
+      status.classList.add('error');
+      $('ocrMsg').textContent = 'Couldn’t read the receipt (no internet on first use?)';
+    } finally {
+      if (run === ocrRun) $('ocrAgainBtn').hidden = false;
+    }
+  }
+
+  /** Put what was read off a receipt / PDF / email into the form. */
+  function applyParsed(r, { overwrite, from = 'receipt' }) {
+    const status = $('ocrStatus');
+    status.hidden = false; status.className = 'ocr-status';
+    {
       if (r.abn) editing.abn = r.abn;
       const f = $('editForm');
       const filled = [];
@@ -569,18 +696,13 @@
       updateMoney();
       status.classList.add('done');
       $('ocrMsg').textContent = filled.length || r.date
-        ? 'Filled in from the receipt – please check.'
-        : 'Couldn’t read the details – please type them in.';
-    } catch (err) {
-      console.error(err);
-      if (run !== ocrRun) return;
-      status.classList.add('error');
-      $('ocrMsg').textContent = 'Couldn’t read the receipt (no internet on first use?)';
-    } finally {
-      if (run === ocrRun) $('ocrAgainBtn').hidden = false;
+        ? `Filled in from the ${from} – please check.`
+        : `Couldn’t read the details from the ${from} – please type them in.`;
+      $('ocrAgainBtn').hidden = false;
     }
   }
   $('ocrAgainBtn').onclick = async () => {
+    if (editing && editing.sourceText) return applyParsed(ReceiptOcr.parseReceipt(editing.sourceText), { overwrite: true, from: editing.source || 'document' });
     if (!editing || !editing.image) return;
     try {
       const canvas = editing.original && editing.quad
@@ -1209,7 +1331,7 @@
   }
 
   applyBrand();
-  migrate().catch(console.error).then(renderList);
+  migrate().catch(console.error).then(renderList).then(handleShared);
   $('appVersion').textContent = `App version ${APP_VERSION}`;
   // Pick up new versions straight away: never use a cached sw.js, check on every open,
   // and reload once when a new version takes over (only while on the claims list).
