@@ -4,6 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
+  const APP_VERSION = '4';
 
   /* ---------------- Storage ---------------- */
   const db = (() => {
@@ -730,7 +731,23 @@
   /* ---------------- Boot ---------------- */
   applyBrand();
   renderList();
+  $('appVersion').textContent = `App version ${APP_VERSION}`;
+  // Pick up new versions straight away: never use a cached sw.js, check on every open,
+  // and reload once when a new version takes over (only while on the receipt list).
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then(reg => {
+        const check = () => reg.update().catch(() => {});
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+      })
+      .catch(() => {});
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded) return;
+      reloaded = true;
+      if (!$('listView').hidden) location.reload();
+      else toast('App updated – it will refresh next time you open it.', 4000);
+    });
   }
 })();
