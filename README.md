@@ -5,7 +5,7 @@ A phone app for work receipts. It runs in the browser and needs no install, acco
 1. **Snap** a receipt with the camera, or pick a photo from your library.
 2. **Crop**: the app finds the receipt's edges and straightens it. You can drag the corners to adjust. **Enhance** turns it into a clean black-and-white scan.
 3. **Read**: the app reads the receipt on the phone and fills in the **vendor**, **total**, **GST** and **date**. Check them and fix anything it got wrong (**Read again** re-scans).
-4. **Note** what it is and what it was for, and pick a category.
+4. **Note** what it is and what it was for. The **expense type** is guessed from the receipt (fuel, parking, meals, travel…). Pick another from the list, or choose **Type your own…** to add a new type; your own types are remembered and can be removed in Settings.
 5. **Send**: tick the receipts you want, pick a saved email address, and send them as **one PDF expense report** (a summary page plus one page per receipt) or as separate photos.
 
 Receipts are kept **only on your phone**, in the browser's storage. Sent receipts move to the **Sent** tab. You can delete them from Settings.
@@ -14,8 +14,8 @@ Receipts are kept **only on your phone**, in the browser's storage. Sent receipt
 
 | Field | How it's worked out |
 | --- | --- |
-| Total (inc GST) | Read from the receipt's TOTAL / amount due line. You can type over it. |
-| GST | Read from the receipt's GST line if there is one, otherwise **1/11 of the total** (10% GST). Type over it to override. |
+| Total (inc GST) | The receipt's own arithmetic first: if three figures fit **ex-GST + GST = total** (e.g. 83.25 + 8.32 = 91.57), that total is used. Otherwise it's the **highest dollar value** on the receipt, ignoring cash handed over, change, points and savings. You can type over it. |
+| GST | The GST figure from that sum, or the amount on a GST line closest to 1/11 of the total, otherwise **1/11 of the total** (10% GST). Type over it to override. |
 | Ex GST | Always **Total − GST**, recalculated automatically. |
 
 Example: a total of 11.00 gives GST 1.00 and ex-GST 10.00. Change GST to 0.50 and ex-GST becomes 10.50. **GST = 1/11 of total** puts the automatic GST back, and **No GST** sets it to 0. The PDF report shows ex-GST, GST and total for each receipt, plus overall totals.

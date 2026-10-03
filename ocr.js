@@ -97,52 +97,78 @@
     return s.slice(0, 60);
   }
 
-  const TOTAL_WORDS = [
-    [/\b(grand\s*total|total\s*(amount|due|payable|aud|inc|incl)|amount\s*(due|payable|paid)|balance\s*(due)?|to\s*pay)\b/i, 5],
-    [/\btota[l1]\b|\bt0tal\b/i, 4],
-    [/\b(eftpos|visa|mastercard|master\s*card|amex|credit|debit|card|paid|purchase)\b/i, 2],
-  ];
-  const NOT_TOTAL = /\b(sub\s*-?\s*total|subtotal|change|cash\s*out|rounding|savings?|discount|points|tip)\b/i;
+  const TOTAL_WORD = /\b(grand\s*total|tota[l1]|t0tal|amount\s*(due|payable|paid)|balance\s*due|to\s*pay|eftpos|visa|mastercard|amex|card|purchase)\b/i;
+  const SUBTOTAL_WORD = /\b(sub\s*-?\s*total|ex\.?\s*g\.?s\.?t|excl?\.?\s*g\.?s\.?t|excluding\s*g\.?s\.?t|before\s*g\.?s\.?t|pre\s*-?\s*g\.?s\.?t|net(\s*amount|\s*total)?)\b/i;
   const GST_WORD = /\b(g\.?s\.?t|tax)\b/i;
+  // Lines whose amounts are never the total: cash handed over, change, points, savings…
+  const IGNORE_LINE = /\b(cash|tendered|change|rounding|savings?|saved|you\s*saved|discount|points|rewards?|tip|gift\s*card\s*bal)/i;
+  const DATE_TIME = /\b\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}\b|\b\d{1,2}:\d{2}(:\d{2})?\b/g;
+  const near = (a, b, tol = 0.011) => Math.abs(a - b) <= tol;
 
-  function findTotal(lines) {
-    let best = null;
+  /** Every dollar amount on the receipt, tagged with what its line says. */
+  function collectAmounts(lines) {
+    const out = [];
     lines.forEach((l, i) => {
-      if (NOT_TOTAL.test(l)) return;
-      const amts = amountsIn(l);
-      if (!amts.length) return;
-      // "Total includes GST $1.00" is a GST line, not the total.
-      if (GST_WORD.test(l) && !/\b(inc|incl|including)\b.*\btotal\b|\btotal\b.*\b(inc|incl)\b/i.test(l)) return;
-      if (/\bincludes?\b.*\bg\.?s\.?t\b/i.test(l)) return;
-      for (const [re, weight] of TOTAL_WORDS) {
-        if (re.test(l)) {
-          const score = weight + i / lines.length; // later lines win ties
-          const value = amts[amts.length - 1];
-          if (!best || score > best.score) best = { value, score };
-          break;
-        }
+      const isTotal = TOTAL_WORD.test(l);
+      if (IGNORE_LINE.test(l) && !isTotal) return;
+      const stripped = l.replace(DATE_TIME, ' ');
+      for (const v of amountsIn(stripped)) {
+        if (v <= 0 || v >= 100000) continue;
+        const isSub = SUBTOTAL_WORD.test(l);
+        const isGst = GST_WORD.test(l) && !isSub;
+        out.push({ v, i, line: l, isTotal: isTotal && !isSub && !/\bincludes?\b/i.test(l), isGst, isSub });
       }
     });
-    if (best) return best.value;
-    // Fallback: the biggest amount on the receipt.
-    const all = lines.flatMap(amountsIn).filter(v => v < 100000);
-    return all.length ? Math.max(...all) : null;
+    return out;
   }
 
-  function findGst(lines, total) {
-    const candidates = [];
-    lines.forEach(l => {
-      if (!GST_WORD.test(l)) return;
-      if (/\b(ex|excl|excluding)\b/i.test(l)) return; // "Total ex GST"
-      for (const v of amountsIn(l)) {
-        if (total == null || (v > 0 && v < total * 0.5)) candidates.push(v);
+  /**
+   * Work out total and GST using the receipt's own arithmetic:
+   *   1. Look for three figures where  ex-GST + GST = total  (e.g. 30.00 + 3.00 = 33.00).
+   *      The GST should sit on a GST line, or be about 1/11 of the total.
+   *   2. Otherwise the total is the highest dollar value on the receipt
+   *      (ignoring cash handed over, change, points and similar).
+   *   3. GST is then the amount on a GST line closest to 1/11 of the total.
+   */
+  function findAmounts(lines) {
+    const amts = collectAmounts(lines);
+    if (!amts.length) return { total: null, gst: null, gstFound: false, method: 'none' };
+    const values = [...new Set(amts.map(a => a.v))].sort((a, b) => b - a);
+    const tagged = (v, key) => amts.some(a => near(a.v, v, 0.001) && a[key]);
+
+    // 1. ex + gst = total
+    let best = null;
+    for (const c of values) {
+      for (const b of values) {
+        if (b >= c / 2) continue;
+        const a = c - b;
+        if (!values.some(x => near(x, a))) continue;
+        const gstLabel = tagged(b, 'isGst');
+        const exLabel = tagged(a, 'isSub');
+        const totalLabel = tagged(c, 'isTotal');
+        const oneEleventh = near(b, c / 11, Math.max(0.02, c * 0.002));
+        if (!gstLabel && !oneEleventh) continue; // two items happening to add up – ignore
+        const score = (gstLabel ? 3 : 0) + (exLabel ? 2 : 0) + (totalLabel ? 2 : 0) + (oneEleventh ? 1 : 0);
+        if (score < 3 && !(oneEleventh && c === values[0])) continue; // unlabelled: only trust it for the top amount
+        if (!best || score > best.score || (score === best.score && c > best.total)) best = { total: c, gst: b, ex: a, score };
       }
-    });
-    if (!candidates.length) return null;
-    if (total == null) return candidates[candidates.length - 1];
-    // Prefer the candidate closest to 1/11th of the total.
+    }
+    if (best) return { total: best.total, gst: best.gst, gstFound: true, method: 'sum' };
+
+    // 2. Highest dollar value – unless it looks like an OCR misread next to a labelled total.
+    let total = values[0];
+    const labelled = amts.filter(a => a.isTotal).map(a => a.v);
+    if (labelled.length) {
+      const top = Math.max(...labelled);
+      if (total > top * 3) total = top;
+    }
+
+    // 3. GST line amount closest to 1/11 of the total.
     const expected = total / 11;
-    return candidates.sort((a, b) => Math.abs(a - expected) - Math.abs(b - expected))[0];
+    const gstCands = amts.filter(a => a.isGst && a.v < total / 2).map(a => a.v)
+      .sort((a, b) => Math.abs(a - expected) - Math.abs(b - expected));
+    if (gstCands.length) return { total, gst: gstCands[0], gstFound: true, method: 'highest' };
+    return { total, gst: null, gstFound: false, method: 'highest' };
   }
 
   function findDate(lines) {
@@ -171,22 +197,40 @@
     return m ? m[1].replace(/\s/g, '').replace(/(\d{2})(\d{3})(\d{3})(\d{3})/, '$1 $2 $3 $4') : '';
   }
 
-  /** Turn OCR text into { vendor, total, gst, gstFound, date, abn }. */
+  /** Turn OCR text into { vendor, total, gst, gstFound, method, date, abn }. */
   function parseReceipt(text) {
     const lines = String(text).split(/\r?\n/).map(cleanLine).filter(Boolean);
-    const total = findTotal(lines);
-    const found = findGst(lines, total);
+    const { total, gst, gstFound, method } = findAmounts(lines);
     return {
       vendor: findVendor(lines),
       total: total != null ? round2(total) : null,
-      gst: found != null ? round2(found) : (total != null ? gstFromTotal(total) : null),
-      gstFound: found != null,
+      gst: gstFound ? round2(gst) : (total != null ? gstFromTotal(total) : null),
+      gstFound,
+      method,
       date: findDate(lines),
       abn: findAbn(text),
+      category: guessCategory(text),
     };
   }
 
-  const api = { readText, parseReceipt, gstFromTotal, round2, GST_RATE };
+  /* ---------------- Expense type guess ---------------- */
+  const CATEGORY_HINTS = [
+    ['Parking', /\b(parking|car\s*park|carpark|wilson|secure\s*parking|care\s*park|first\s*parking|entry\s*time|exit\s*time|park\s*fee)\b/i],
+    ['Fuel', /\b(unleaded|diesel|e10|ulp|premium\s*9[58]|vortex|v-?power|fuel|petrol|litres?|ampol|caltex|shell|bp\b|7-?eleven|united\s*petroleum|puma\s*energy|liberty\s*oil|metro\s*petroleum|\d+(\.\d+)?\s*l\s*@)/i],
+    ['Travel – Air', /\b(qantas|virgin\s*australia|jetstar|rex\s*airlines|airline|flight|boarding\s*pass)\b/i],
+    ['Travel – Ground', /\b(uber|taxi|13\s*cabs|cabcharge|didi|ola\b|rideshare|toll|linkt|e-?tag|opal|myki|go\s*card|train|bus\s*fare)\b/i],
+    ['Lodging', /\b(hotel|motel|suites|accommodation|airbnb|resort|lodge|serviced\s*apartments?|check-?in|check-?out|room\s*\d+)\b/i],
+    ['Office Supplies', /\b(officeworks|stationery|printer|toner|ink\s*cartridge|copy\s*paper|post\s*office|australia\s*post)\b/i],
+    ['Software / Subscriptions', /\b(subscription|software|licen[cs]e|microsoft|adobe|google\s*(workspace|cloud)|apple\.com|zoom|dropbox|atlassian)\b/i],
+    ['Meals & Entertainment', /\b(cafe|café|coffee|espresso|latte|flat\s*white|cappuccino|restaurant|bistro|bar|pub|tavern|brewery|grill|kitchen|eatery|dining|diner|burger|pizza|sushi|thai|noodle|bakery|lunch|dinner|breakfast|table\s*\d+|covers?|gratuity)\b/i],
+    ['Staff Amenities', /\b(woolworths|coles|aldi|iga|foodworks|harris\s*farm|costco|milk|tea\s*bags?|biscuits|sugar|paper\s*towel|dishwash|detergent|cleaning)\b/i],
+  ];
+  function guessCategory(text) {
+    for (const [cat, re] of CATEGORY_HINTS) if (re.test(text)) return cat;
+    return '';
+  }
+
+  const api = { readText, parseReceipt, guessCategory, gstFromTotal, round2, GST_RATE };
   global.ReceiptOcr = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

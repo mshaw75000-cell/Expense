@@ -123,17 +123,12 @@
         <input name="date" type="date">
       </label>
       <label class="field">
-        <span>Category</span>
-        <select name="category">
-          <option>Meals &amp; Entertainment</option>
-          <option>Travel – Air</option>
-          <option>Travel – Ground</option>
-          <option>Lodging</option>
-          <option>Fuel / Mileage</option>
-          <option>Office Supplies</option>
-          <option>Software / Subscriptions</option>
-          <option>Other</option>
-        </select>
+        <span>Expense type</span>
+        <select name="category" id="categorySelect"></select>
+      </label>
+      <label class="field" id="customCategoryWrap" hidden>
+        <span>Type your own expense type</span>
+        <input name="customCategory" id="customCategory" placeholder="e.g. Conference fees, Tolls, Gifts" maxlength="40">
       </label>
       <div class="bottom-bar">
         <button type="button" class="btn ghost danger" id="deleteBtn" hidden>Delete</button>
@@ -161,6 +156,9 @@
         </label>
         <button type="button" class="btn" id="addEmailBtn">Add</button>
       </div>
+
+      <h3>Your expense types</h3>
+      <ul class="chips" id="customCatList"></ul>
 
       <h3>Branding</h3>
       <div class="row">

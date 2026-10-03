@@ -32,7 +32,7 @@
   })();
 
   const SETTINGS_KEY = 'mentis-expenses-settings';
-  const defaults = { name: '', emails: [], lastEmail: '', logo: '', primary: '#0b2a4a', accent: '#00a6a6', enhance: true };
+  const defaults = { name: '', emails: [], customCategories: [], lastEmail: '', logo: '', primary: '#0b2a4a', accent: '#00a6a6', enhance: true };
   let settings = load();
   function load() {
     try { return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
@@ -168,7 +168,7 @@
     busy(true);
     try {
       const canvas = await fileToCanvas(file);
-      editing = { id: uid(), created: Date.now(), date: todayISO(), category: 'Meals & Entertainment', sent: false, isNew: true };
+      editing = { id: uid(), created: Date.now(), date: todayISO(), category: '', sent: false, isNew: true };
       startCrop(canvas, null);
     } catch (err) {
       console.error(err);
@@ -341,7 +341,8 @@
     $('ocrStatus').hidden = true;
     $('ocrAgainBtn').hidden = false;
     f.date.value = editing.date || todayISO();
-    f.category.value = editing.category || 'Other';
+    setCategory(editing.category || '');
+    categoryTouched = !!editing.category;
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     previewUrl = URL.createObjectURL(editing.image);
     $('editPreview').src = previewUrl;
@@ -413,6 +414,7 @@
         if (r.gstFound) { f.gst.value = fix2(r.gst); f.gst.classList.add('filled'); }
       }
       if (r.date && (overwrite || editing.isNew)) { f.date.value = r.date; f.date.classList.add('filled'); }
+      if (r.category && (overwrite || !categoryTouched)) { setCategory(r.category); f.category.classList.add('filled'); }
       updateMoney();
       status.classList.add('done');
       $('ocrMsg').textContent = filled.length || r.date
@@ -439,9 +441,56 @@
       gst: num(f.gst.value) != null ? fix2(num(f.gst.value)) : '',
       gstMode,
       date: f.date.value || editing.date,
-      category: f.category.value || editing.category,
+      category: readCategory(),
     });
   }
+
+  /* ----- Expense type: fixed list + your own typed types ----- */
+  const CATEGORIES = [
+    'Meals & Entertainment', 'Staff Amenities', 'Parking', 'Fuel', 'Travel – Air', 'Travel – Ground',
+    'Lodging', 'Office Supplies', 'Software / Subscriptions', 'Other',
+  ];
+  const CUSTOM = '__custom';
+  let categoryTouched = false;
+
+  function setCategory(value) {
+    const sel = $('categorySelect');
+    const mine = settings.customCategories.filter(c => !CATEGORIES.includes(c));
+    if (value && !CATEGORIES.includes(value) && !mine.includes(value)) mine.unshift(value);
+    sel.innerHTML = '';
+    sel.add(new Option('Choose expense type…', ''));
+    CATEGORIES.forEach(c => sel.add(new Option(c, c)));
+    if (mine.length) {
+      const group = document.createElement('optgroup');
+      group.label = 'Your types';
+      mine.forEach(c => group.appendChild(new Option(c, c)));
+      sel.appendChild(group);
+    }
+    sel.add(new Option('✎ Type your own…', CUSTOM));
+    sel.value = value || '';
+    $('customCategoryWrap').hidden = true;
+    $('customCategory').value = '';
+  }
+
+  function readCategory() {
+    const sel = $('categorySelect');
+    if (sel.value !== CUSTOM) return sel.value;
+    const typed = $('customCategory').value.trim().replace(/\s+/g, ' ');
+    if (!typed) return '';
+    const known = CATEGORIES.find(c => c.toLowerCase() === typed.toLowerCase());
+    if (known) return known;
+    settings.customCategories = [typed, ...settings.customCategories.filter(c => c.toLowerCase() !== typed.toLowerCase())].slice(0, 12);
+    saveSettings();
+    return typed;
+  }
+
+  $('categorySelect').addEventListener('change', e => {
+    categoryTouched = true;
+    e.target.classList.remove('filled');
+    const custom = e.target.value === CUSTOM;
+    $('customCategoryWrap').hidden = !custom;
+    if (custom) $('customCategory').focus();
+  });
 
   $('recropBtn').onclick = async () => {
     captureForm();
@@ -494,7 +543,22 @@
       ul.appendChild(li);
     });
   }
-  $('settingsBtn').onclick = () => { renderSettings(); show('settingsView'); };
+  function renderCustomCats() {
+    const ul = $('customCatList');
+    ul.innerHTML = settings.customCategories.length ? '' : '<li class="muted">Types you type in yourself appear here.</li>';
+    settings.customCategories.forEach((c, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = `<span>${escapeHtml(c)}</span><button type="button" data-i="${i}">Remove</button>`;
+      ul.appendChild(li);
+    });
+  }
+  $('customCatList').addEventListener('click', e => {
+    const i = e.target.dataset.i;
+    if (i == null) return;
+    settings.customCategories.splice(Number(i), 1);
+    saveSettings(); renderCustomCats();
+  });
+  $('settingsBtn').onclick = () => { renderSettings(); renderCustomCats(); show('settingsView'); };
   $('settingsDone').onclick = () => {
     settings.name = $('settingsForm').name.value.trim();
     saveSettings();
