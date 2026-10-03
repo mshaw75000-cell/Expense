@@ -159,3 +159,32 @@ body.selecting .fab { display: none; }
 .busy { position: fixed; inset: 0; z-index: 40; background: rgba(8,18,30,.35); display: grid; place-items: center; }
 .spinner { width: 44px; height: 44px; border-radius: 50%; border: 4px solid rgba(255,255,255,.3); border-top-color: #fff; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- Receipt reading + GST ---------- */
+.ocr-status {
+  display: flex; align-items: center; gap: 10px; margin: -4px 0 14px;
+  padding: 10px 12px; border-radius: 10px; background: #e3f6f6; color: #035e5e; font-size: 14px; font-weight: 600;
+}
+.ocr-status #ocrMsg { flex: 1; }
+.ocr-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+.ocr-status.done .ocr-dot { animation: none; }
+.ocr-status.error { background: #fdecea; color: #8a1f14; }
+.ocr-status.error .ocr-dot { background: var(--danger); animation: none; }
+@keyframes pulse { 50% { opacity: .25; } }
+.field input.filled { background: #f0fbfb; }
+
+.money-card {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 10px;
+  background: var(--card); border: 1.5px solid var(--line); border-radius: var(--radius);
+  padding: 12px 12px 4px; margin-bottom: 14px;
+}
+.money-card .field { margin-bottom: 10px; }
+.money-card .field > span { font-size: 13px; white-space: nowrap; }
+.money-card input { padding: 10px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+.money-card input[readonly] { background: #f4f6f9; color: var(--primary); font-weight: 700; }
+.gst-mode { font-style: normal; font-weight: 600; font-size: 11px; color: var(--accent); }
+.gst-mode.manual { color: #b26a00; }
+.gst-actions { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.gst-warn { grid-column: 1 / -1; color: var(--danger); font-size: 13px; margin: 0 0 8px; }
+.receipt .amt { text-align: right; }
+.receipt .gst-line { font-size: 11px; font-weight: 600; color: var(--muted); }

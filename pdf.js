@@ -83,6 +83,10 @@
     const pages = [];
     const muted = '#677585', ink = '#13202e';
     const total = receipts.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+    const totalGst = receipts.reduce((s, r) => s + (parseFloat(r.gst) || 0), 0);
+    const hasGst = r => r.gst !== '' && r.gst != null && !isNaN(parseFloat(r.gst));
+    const exOf = r => (r.amount === '' || r.amount == null) ? '' : (parseFloat(r.amount) || 0) - (parseFloat(r.gst) || 0);
+    const title = r => [r.vendor, r.description].filter(Boolean).join(' – ') || '(no description)';
     const dates = receipts.map(r => r.date).filter(Boolean).sort();
     const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -99,7 +103,7 @@
     }
 
     // ---- Summary page(s) ----
-    const cols = { date: M, desc: M + 72, cat: M + 340, amt: PAGE_W - M };
+    const cols = { date: M, desc: M + 62, ex: PAGE_W - M - 150, gst: PAGE_W - M - 82, amt: PAGE_W - M };
     let p = new Page(); pages.push(p);
     header(p, 'Expense Report');
     let y = 100;
@@ -110,31 +114,41 @@
     const tableHead = () => {
       p.rect(M, y - 14, PAGE_W - 2 * M, 22, '#eef1f5');
       p.text('DATE', cols.date + 6, y + 1, { size: 8, bold: true, color: muted });
-      p.text('DESCRIPTION / PURPOSE', cols.desc, y + 1, { size: 8, bold: true, color: muted });
-      p.text('CATEGORY', cols.cat, y + 1, { size: 8, bold: true, color: muted });
-      p.text('AMOUNT', cols.amt - 6, y + 1, { size: 8, bold: true, color: muted, align: 'right' });
+      p.text('VENDOR / DESCRIPTION / PURPOSE', cols.desc, y + 1, { size: 8, bold: true, color: muted });
+      p.text('EX GST', cols.ex - 6, y + 1, { size: 8, bold: true, color: muted, align: 'right' });
+      p.text('GST', cols.gst - 6, y + 1, { size: 8, bold: true, color: muted, align: 'right' });
+      p.text('TOTAL', cols.amt - 6, y + 1, { size: 8, bold: true, color: muted, align: 'right' });
       y += 24;
     };
     tableHead();
     receipts.forEach((r, i) => {
-      const purposeLines = r.purpose ? wrap(r.purpose, 9, cols.cat - cols.desc - 10).slice(0, 3) : [];
+      const descW = cols.ex - cols.desc - 60;
+      const sub = [r.category, r.purpose].filter(Boolean).join(' · ');
+      const purposeLines = sub ? wrap(sub, 9, descW).slice(0, 3) : [];
       const rowH = 16 + purposeLines.length * 11 + 8;
       if (y + rowH > PAGE_H - 90) {
         p = new Page(); pages.push(p); header(p, 'Expense Report (cont.)'); y = 100; tableHead();
       }
       p.text(fmtDate(r.date, true), cols.date + 6, y, { size: 10, color: ink });
-      p.text(fit(`${i + 1}. ${r.description || '(no description)'}`, 10, cols.cat - cols.desc - 10, true), cols.desc, y, { size: 10, bold: true, color: ink });
-      p.text(fit(r.category || '', 9, cols.amt - cols.cat - 70), cols.cat, y, { size: 9, color: muted });
+      p.text(fit(`${i + 1}. ${title(r)}`, 10, descW, true), cols.desc, y, { size: 10, bold: true, color: ink });
+      p.text(money(exOf(r)), cols.ex - 6, y, { size: 10, color: ink, align: 'right' });
+      p.text(hasGst(r) ? money(r.gst) : '–', cols.gst - 6, y, { size: 10, color: ink, align: 'right' });
       p.text(money(r.amount), cols.amt - 6, y, { size: 10, bold: true, color: ink, align: 'right' });
       let yy = y + 13;
       for (const l of purposeLines) { p.text(l, cols.desc, yy, { size: 9, color: muted }); yy += 11; }
       y += rowH;
       p.line(M, y - 12, PAGE_W - M, '#dfe4ea');
     });
-    if (y + 40 > PAGE_H - 50) { p = new Page(); pages.push(p); header(p, 'Expense Report (cont.)'); y = 100; }
-    p.rect(PAGE_W - M - 200, y - 6, 200, 30, primary);
-    p.text('TOTAL', PAGE_W - M - 188, y + 13, { size: 10, bold: true, color: '#ffffff' });
-    p.text(money(total), PAGE_W - M - 12, y + 13, { size: 13, bold: true, color: '#ffffff', align: 'right' });
+    if (y + 80 > PAGE_H - 50) { p = new Page(); pages.push(p); header(p, 'Expense Report (cont.)'); y = 100; }
+    const bx = PAGE_W - M - 220;
+    p.text('Total ex GST', bx + 12, y + 6, { size: 10, color: muted });
+    p.text(money(total - totalGst) || '$0.00', PAGE_W - M - 12, y + 6, { size: 10, color: ink, align: 'right' });
+    p.text('GST', bx + 12, y + 22, { size: 10, color: muted });
+    p.text(money(totalGst) || '$0.00', PAGE_W - M - 12, y + 22, { size: 10, color: ink, align: 'right' });
+    y += 32;
+    p.rect(bx, y - 6, 220, 30, primary);
+    p.text('TOTAL (INC GST)', bx + 12, y + 13, { size: 10, bold: true, color: '#ffffff' });
+    p.text(money(total) || '$0.00', PAGE_W - M - 12, y + 13, { size: 13, bold: true, color: '#ffffff', align: 'right' });
 
     // ---- One page per receipt ----
     receipts.forEach((r, i) => {
@@ -143,11 +157,15 @@
       let yy = 98;
       const amt = money(r.amount);
       const amtW = amt ? textWidth(amt, 16, true) + 12 : 0;
-      for (const l of wrap(r.description || '(no description)', 16, PAGE_W - 2 * M - amtW, true).slice(0, 2)) {
+      for (const l of wrap(r.vendor || r.description || '(no description)', 16, PAGE_W - 2 * M - amtW, true).slice(0, 2)) {
         pg.text(l, M, yy, { size: 16, bold: true, color: ink }); yy += 19;
       }
-      if (amt) pg.text(amt, PAGE_W - M, 98, { size: 16, bold: true, color: accent, align: 'right' });
-      pg.text([fmtDate(r.date), r.category].filter(Boolean).join('  ·  '), M, yy, { size: 10, color: muted }); yy += 18;
+      if (amt) {
+        pg.text(amt, PAGE_W - M, 98, { size: 16, bold: true, color: accent, align: 'right' });
+        pg.text(`GST ${hasGst(r) ? money(r.gst) : '$0.00'}  ·  Ex GST ${money(exOf(r))}`, PAGE_W - M, 113, { size: 9, color: muted, align: 'right' });
+      }
+      if (r.vendor && r.description) { pg.text(r.description, M, yy, { size: 11, bold: true, color: primary }); yy += 15; }
+      pg.text([fmtDate(r.date), r.category, r.abn ? 'ABN ' + r.abn : ''].filter(Boolean).join('  ·  '), M, yy, { size: 10, color: muted }); yy += 18;
       if (r.purpose) {
         pg.text('Purpose:', M, yy, { size: 10, bold: true, color: primary });
         const lines = wrap(r.purpose, 10, PAGE_W - 2 * M - 52).slice(0, 4);

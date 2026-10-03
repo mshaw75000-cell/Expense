@@ -80,24 +80,48 @@
         <img id="editPreview" alt="Cropped receipt">
         <button type="button" class="btn small ghost" id="recropBtn">Re-crop</button>
       </div>
+      <div class="ocr-status" id="ocrStatus" hidden>
+        <span class="ocr-dot"></span>
+        <span id="ocrMsg">Reading receipt…</span>
+        <button type="button" class="btn small ghost" id="ocrAgainBtn" hidden>Read again</button>
+      </div>
+      <label class="field">
+        <span>Vendor</span>
+        <input name="vendor" placeholder="e.g. Woolworths, Qantas, Cafe Roma">
+      </label>
       <label class="field">
         <span>What is it?</span>
-        <input name="description" required placeholder="e.g. Dinner at Nobu, Uber to airport">
+        <input name="description" placeholder="e.g. Client lunch, Taxi to airport">
       </label>
       <label class="field">
         <span>What was it for?</span>
         <textarea name="purpose" rows="2" placeholder="e.g. Client meeting with Acme – Q4 renewal"></textarea>
       </label>
-      <div class="row">
+
+      <div class="money-card">
         <label class="field">
-          <span>Amount</span>
+          <span>Total (inc GST)</span>
           <input name="amount" inputmode="decimal" placeholder="0.00">
         </label>
         <label class="field">
-          <span>Date</span>
-          <input name="date" type="date">
+          <span>GST <em class="gst-mode" id="gstMode"></em></span>
+          <input name="gst" inputmode="decimal" placeholder="0.00">
         </label>
+        <label class="field">
+          <span>Ex GST</span>
+          <input name="exgst" readonly tabindex="-1">
+        </label>
+        <div class="gst-actions">
+          <button type="button" class="btn small ghost" id="gstAutoBtn">GST = 1/11 of total</button>
+          <button type="button" class="btn small ghost" id="gstNoneBtn">No GST</button>
+        </div>
+        <p class="gst-warn" id="gstWarn" hidden>GST is more than the total – check the amounts.</p>
       </div>
+
+      <label class="field">
+        <span>Date</span>
+        <input name="date" type="date">
+      </label>
       <label class="field">
         <span>Category</span>
         <select name="category">
@@ -198,6 +222,7 @@
   <div class="toast" id="toast" hidden></div>
   <div class="busy" id="busy" hidden><div class="spinner"></div></div>
 
+  <script src="ocr.js"></script>
   <script src="pdf.js"></script>
   <script src="crop.js"></script>
   <script src="app.js"></script>

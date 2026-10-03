@@ -4,10 +4,23 @@ A phone app for work receipts. It runs in the browser and needs no install, acco
 
 1. **Snap** a receipt with the camera, or pick a photo from your library.
 2. **Crop**: the app finds the receipt's edges and straightens it. You can drag the corners to adjust. **Enhance** turns it into a clean black-and-white scan.
-3. **Note** what it is, what it was for, the amount, the date and a category.
-4. **Send**: tick the receipts you want, pick a saved email address, and send them as **one PDF expense report** (a summary page plus one page per receipt) or as separate photos.
+3. **Read**: the app reads the receipt on the phone and fills in the **vendor**, **total**, **GST** and **date**. Check them and fix anything it got wrong (**Read again** re-scans).
+4. **Note** what it is and what it was for, and pick a category.
+5. **Send**: tick the receipts you want, pick a saved email address, and send them as **one PDF expense report** (a summary page plus one page per receipt) or as separate photos.
 
 Receipts are kept **only on your phone**, in the browser's storage. Sent receipts move to the **Sent** tab. You can delete them from Settings.
+
+## GST
+
+| Field | How it's worked out |
+| --- | --- |
+| Total (inc GST) | Read from the receipt's TOTAL / amount due line. You can type over it. |
+| GST | Read from the receipt's GST line if there is one, otherwise **1/11 of the total** (10% GST). Type over it to override. |
+| Ex GST | Always **Total − GST**, recalculated automatically. |
+
+Example: a total of 11.00 gives GST 1.00 and ex-GST 10.00. Change GST to 0.50 and ex-GST becomes 10.50. **GST = 1/11 of total** puts the automatic GST back, and **No GST** sets it to 0. The PDF report shows ex-GST, GST and total for each receipt, plus overall totals.
+
+Receipt reading uses [Tesseract](https://github.com/naptha/tesseract.js), which runs on the phone itself. The first scan downloads about 5 MB from cdn.jsdelivr.net; after that it works offline. Receipt photos are never uploaded anywhere.
 
 ## Putting it on your phone
 
@@ -46,5 +59,6 @@ To change the default colours for everyone, edit `--primary` and `--accent` at t
 | `styles.css` | Look and feel (brand colours at the top) |
 | `app.js` | Screens, storage, sending |
 | `crop.js` | Receipt edge detection, perspective straightening, enhance |
+| `ocr.js` | Receipt reading: vendor, total, GST, date, ABN |
 | `pdf.js` | Builds the PDF expense report (no external libraries) |
 | `sw.js`, `manifest.webmanifest`, `icon*` | Offline support and home-screen icon |

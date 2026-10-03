@@ -103,12 +103,12 @@
         <button class="check" aria-label="Select">${selected.has(r.id) ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12l5 5L20 7"/></svg>' : ''}</button>
         <img class="thumb" src="${url}" alt="">
         <div class="info">
-          <div class="desc">${escapeHtml(r.description || '(no description)')}</div>
-          <div class="purpose">${escapeHtml(r.purpose || '')}</div>
+          <div class="desc">${escapeHtml(r.vendor || r.description || '(no description)')}</div>
+          <div class="purpose">${escapeHtml([r.vendor ? r.description : '', r.purpose].filter(Boolean).join(' – '))}</div>
           <div class="meta">${escapeHtml(r.date || '')} · ${escapeHtml(r.category || '')}
             ${r.sent ? `<span class="badge" title="${escapeHtml(r.sentTo || '')}">Sent ${escapeHtml((r.sentAt || '').slice(0, 10))}</span>` : ''}</div>
         </div>
-        <div class="amt">${money(r.amount)}</div>`;
+        <div class="amt">${money(r.amount)}${r.gst !== undefined && r.gst !== '' ? `<div class="gst-line">GST ${money(r.gst)}</div>` : ''}</div>`;
       list.appendChild(li);
     }
     $('emptyState').hidden = items.length > 0;
@@ -300,7 +300,7 @@
     $('enhanceBtn').setAttribute('aria-pressed', String(settings.enhance));
   };
   $('cropCancel').onclick = () => {
-    if (editing && !editing.isNew) show('editView');
+    if (editing && editing.image) show('editView'); // re-crop cancelled
     else { editing = null; show('listView'); }
   };
 
@@ -317,6 +317,7 @@
       Object.assign(editing, { image, thumb, original, quad: quad.map(p => ({ ...p })), w: out.width, h: out.height });
       fillEdit();
       show('editView');
+      readReceipt(out, { overwrite: false });
     } catch (err) {
       console.error(err);
       toast('Crop failed – try again.');
@@ -329,9 +330,16 @@
   let previewUrl;
   function fillEdit() {
     const f = $('editForm');
+    f.vendor.value = editing.vendor || '';
     f.description.value = editing.description || '';
     f.purpose.value = editing.purpose || '';
     f.amount.value = editing.amount || '';
+    f.gst.value = editing.gst || '';
+    gstMode = editing.gstMode || 'auto';
+    updateMoney();
+    f.querySelectorAll('.filled').forEach(el => el.classList.remove('filled'));
+    $('ocrStatus').hidden = true;
+    $('ocrAgainBtn').hidden = false;
     f.date.value = editing.date || todayISO();
     f.category.value = editing.category || 'Other';
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -349,7 +357,94 @@
     show('editView');
   }
 
+  /* ----- Total / GST / Ex GST -----
+     GST defaults to 1/11 of the total (Australian 10% GST). Typing a GST amount overrides it and
+     Ex GST = Total − GST, e.g. Total 11.00 → GST 1.00, Ex 10.00; change GST to 0.50 → Ex 10.50. */
+  let gstMode = 'auto'; // 'auto' (1/11 of total) | 'receipt' (read off receipt) | 'manual' (typed)
+  const num = v => { const n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : null; };
+  const fix2 = n => (n == null ? '' : ReceiptOcr.round2(n).toFixed(2));
+
+  function updateMoney() {
+    const f = $('editForm');
+    const total = num(f.amount.value);
+    if (gstMode === 'auto') f.gst.value = total == null ? '' : fix2(ReceiptOcr.gstFromTotal(total));
+    const gst = num(f.gst.value) || 0;
+    f.exgst.value = total == null ? '' : fix2(total - gst);
+    const label = $('gstMode');
+    label.textContent = { auto: '· auto 1/11', receipt: '· from receipt', manual: '· edited' }[gstMode];
+    label.classList.toggle('manual', gstMode === 'manual');
+    $('gstWarn').hidden = !(total != null && gst > total);
+  }
+  $('editForm').amount.addEventListener('input', updateMoney);
+  $('editForm').gst.addEventListener('input', () => { gstMode = 'manual'; updateMoney(); });
+  $('editForm').amount.addEventListener('blur', e => { const n = num(e.target.value); if (n != null) e.target.value = fix2(n); });
+  $('editForm').gst.addEventListener('blur', e => { const n = num(e.target.value); if (n != null) e.target.value = fix2(n); updateMoney(); });
+  $('gstAutoBtn').onclick = () => { gstMode = 'auto'; updateMoney(); };
+  $('gstNoneBtn').onclick = () => { gstMode = 'manual'; $('editForm').gst.value = '0.00'; updateMoney(); };
+
+  /* ----- Reading the receipt ----- */
+  let ocrRun = 0;
+  async function readReceipt(image, { overwrite }) {
+    const run = ++ocrRun, id = editing.id;
+    const status = $('ocrStatus');
+    status.hidden = false; status.className = 'ocr-status';
+    $('ocrMsg').textContent = 'Reading receipt…';
+    $('ocrAgainBtn').hidden = true;
+    try {
+      const text = await ReceiptOcr.readText(image);
+      if (run !== ocrRun || !editing || editing.id !== id || $('editView').hidden) return;
+      const r = ReceiptOcr.parseReceipt(text);
+      editing.ocrText = text;
+      if (r.abn) editing.abn = r.abn;
+      const f = $('editForm');
+      const filled = [];
+      const put = (field, value) => {
+        if (value == null || value === '') return;
+        if (!overwrite && f[field].value.trim()) return;
+        f[field].value = value;
+        f[field].classList.add('filled');
+        filled.push(field);
+      };
+      put('vendor', r.vendor);
+      const totalWasEmpty = !f.amount.value.trim();
+      put('amount', r.total != null ? fix2(r.total) : '');
+      if (overwrite || (totalWasEmpty && gstMode !== 'manual')) {
+        gstMode = r.gstFound ? 'receipt' : 'auto';
+        if (r.gstFound) { f.gst.value = fix2(r.gst); f.gst.classList.add('filled'); }
+      }
+      if (r.date && (overwrite || editing.isNew)) { f.date.value = r.date; f.date.classList.add('filled'); }
+      updateMoney();
+      status.classList.add('done');
+      $('ocrMsg').textContent = filled.length || r.date
+        ? 'Filled in from the receipt – please check.'
+        : 'Couldn’t read the details – please type them in.';
+    } catch (err) {
+      console.error(err);
+      if (run !== ocrRun) return;
+      status.classList.add('error');
+      $('ocrMsg').textContent = 'Couldn’t read the receipt (no internet on first use?)';
+    } finally {
+      if (run === ocrRun) $('ocrAgainBtn').hidden = false;
+    }
+  }
+  $('ocrAgainBtn').onclick = () => { if (editing && editing.image) readReceipt(editing.image, { overwrite: true }); };
+
+  function captureForm() {
+    const f = $('editForm');
+    Object.assign(editing, {
+      vendor: f.vendor.value.trim(),
+      description: f.description.value.trim(),
+      purpose: f.purpose.value.trim(),
+      amount: num(f.amount.value) != null ? fix2(num(f.amount.value)) : '',
+      gst: num(f.gst.value) != null ? fix2(num(f.gst.value)) : '',
+      gstMode,
+      date: f.date.value || editing.date,
+      category: f.category.value || editing.category,
+    });
+  }
+
   $('recropBtn').onclick = async () => {
+    captureForm();
     busy(true);
     try { startCrop(await fileToCanvas(editing.original), editing.quad); }
     finally { busy(false); }
@@ -357,15 +452,10 @@
 
   $('editForm').addEventListener('submit', async e => {
     e.preventDefault();
-    const f = e.target;
-    const amt = f.amount.value.replace(/[^0-9.\-]/g, '');
-    Object.assign(editing, {
-      description: f.description.value.trim(),
-      purpose: f.purpose.value.trim(),
-      amount: amt && !isNaN(parseFloat(amt)) ? parseFloat(amt).toFixed(2) : '',
-      date: f.date.value,
-      category: f.category.value,
-    });
+    captureForm();
+    editing.exgst = editing.amount !== '' ? fix2(num(editing.amount) - (num(editing.gst) || 0)) : '';
+    if (!editing.vendor && !editing.description) return toast('Add a vendor or what it is.');
+    ocrRun++; // ignore any reading still in progress
     const rec = { ...editing };
     delete rec.isNew;
     try {
@@ -379,7 +469,7 @@
     show('listView');
     renderList();
   });
-  $('editCancel').onclick = () => { editing = null; show('listView'); };
+  $('editCancel').onclick = () => { ocrRun++; editing = null; show('listView'); };
   $('deleteBtn').onclick = async () => {
     if (!confirm('Delete this receipt?')) return;
     await db.del(editing.id);
@@ -485,6 +575,7 @@
     const recs = (await db.all()).filter(r => selected.has(r.id))
       .sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.created - b.created);
     const total = recs.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+    const totalGst = recs.reduce((s, r) => s + (parseFloat(r.gst) || 0), 0);
     const who = settings.name || 'Expenses';
     const stamp = todayISO();
     const safe = s => s.replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '');
@@ -497,14 +588,15 @@
       const pdf = ExpensePdf.buildExpenseReport({ name: settings.name, receipts: withBytes, primary: settings.primary, accent: settings.accent });
       files = [new File([pdf], `${safe(who)}_Expenses_${stamp}.pdf`, { type: 'application/pdf' })];
     } else {
-      files = recs.map((r, i) => new File([r.image], `${r.date || stamp}_${i + 1}_${safe(r.description || 'receipt').slice(0, 40)}.jpg`, { type: 'image/jpeg' }));
+      files = recs.map((r, i) => new File([r.image], `${r.date || stamp}_${i + 1}_${safe(r.vendor || r.description || 'receipt').slice(0, 40)}.jpg`, { type: 'image/jpeg' }));
     }
 
     const subject = `Expense receipts – ${who} – ${stamp}`;
     const lines = recs.map((r, i) =>
-      `${i + 1}. ${r.date || ''}  ${r.description || '(no description)'}${r.amount ? '  –  ' + money(r.amount) : ''}\n` +
+      `${i + 1}. ${r.date || ''}  ${[r.vendor, r.description].filter(Boolean).join(' – ') || '(no description)'}` +
+      `${r.amount ? '  –  ' + money(r.amount) + (r.gst !== '' && r.gst != null ? ` (GST ${money(r.gst)})` : '') : ''}\n` +
       `    ${r.category || ''}${r.purpose ? ' · For: ' + r.purpose : ''}`);
-    const body = `Hi,\n\nPlease find attached ${recs.length} receipt${recs.length === 1 ? '' : 's'} for reimbursement.\n\n${lines.join('\n')}\n\nTotal: ${money(total) || '$0.00'}\n\nThanks,\n${settings.name || ''}`.trim();
+    const body = `Hi,\n\nPlease find attached ${recs.length} receipt${recs.length === 1 ? '' : 's'} for reimbursement.\n\n${lines.join('\n')}\n\nTotal: ${money(total) || '$0.00'} (incl. GST ${money(totalGst) || '$0.00'}; ex GST ${money(total - totalGst) || '$0.00'})\n\nThanks,\n${settings.name || ''}`.trim();
 
     prepared = { files, subject, body, ids: recs.map(r => r.id) };
     const canShareFiles = !!(navigator.canShare && navigator.canShare({ files }));
