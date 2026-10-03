@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '9';
+  const APP_VERSION = '10';
   const UNITS = ['Mentis', 'Macrack'];
 
   /* ---------------- Storage ---------------- */
@@ -900,7 +900,12 @@
       // Android's share menu won't take Excel files, so fall back to the same spreadsheet as CSV
       // (opens in Excel) rather than skipping the app picker.
       const canShare = f => !!(navigator.canShare && navigator.canShare({ files: f }));
-      const shareFiles = canShare(files) ? files : canShare([pdfFile, csvFile]) ? [pdfFile, csvFile] : canShare([pdfFile]) ? [pdfFile] : null;
+      // What to hand the phone's app menu, best first. Android's Chrome says it can share Excel files
+      // but then refuses, so on Android the spreadsheet goes as CSV (opens in Excel). If the phone
+      // still refuses, the next tap tries the next option, ending with the PDF on its own.
+      const android = /Android/i.test(navigator.userAgent);
+      const shareOptions = (android ? [[pdfFile, csvFile], [pdfFile]] : [files, [pdfFile, csvFile], [pdfFile]]).filter(canShare);
+      const shareFiles = shareOptions[0] || null;
 
       const subject = `Expense claim – ${who} – ${label}${resubTag}`;
       const lines = unitLines.map(([u, l]) => `${u}: ${plural(l.length, 'receipt')}, ${money(l.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0))}`);
@@ -912,7 +917,7 @@
         `Total: ${money(total) || '$0.00'} (GST ${money(totalGst) || '$0.00'}; ex GST ${money(total - totalGst) || '$0.00'})${exText}\n\n` +
         `Attached: PDF claim with receipts and supporting documents, and an Excel spreadsheet.\n\nThanks,\n${settings.name || ''}`.trim();
 
-      prepared = { files, shareFiles, subject, body, month, items, total, exceptions, copy };
+      prepared = { files, shareFiles, shareOptions, shareTry: 0, subject, body, month, items, total, exceptions, copy };
       $('viaShareOpt').hidden = !shareFiles;
       const via = shareFiles ? (settings.sendVia || 'share') : (settings.sendVia === 'save' ? 'save' : 'email');
       document.querySelectorAll('#viaPicker input').forEach(i => { i.checked = i.value === via; });
@@ -1026,13 +1031,16 @@
         if (err && err.name === 'AbortError') return; // closed the app menu without sending
         console.error(err);
         const why = `${err && err.name || 'Error'}${err && err.message ? ': ' + err.message : ''}`;
-        if (err && err.name !== 'NotAllowedError' && p.shareFiles.length > 1) {
-          // The phone wouldn't take these files – next tap shares just the PDF (spreadsheet gets saved).
-          p.shareFiles = [p.shareFiles[0]];
+        if (p.shareTry + 1 < p.shareOptions.length) {
+          // The phone refused these files – the next tap tries a simpler set (finally just the PDF).
+          p.shareTry++;
+          p.shareFiles = p.shareOptions[p.shareTry];
           updateSendNote();
+          $('sendGo').textContent = 'Tap again to open apps';
+          toast(`The phone didn’t take those files (${why}). Tap the button again to try ${p.shareFiles.length === 1 ? 'the PDF on its own' : 'a simpler format'}.`, 6000);
+        } else {
+          toast(`The phone won’t open the app menu (${why}). Choose “Just save the files” instead.`, 7000);
         }
-        $('sendGo').textContent = 'Tap again to open apps';
-        toast(`The phone didn’t open the app menu (${why}). Tap the button again.`, 6000);
       }
     } else if (via === 'save') {
       saveFiles(p.files);
