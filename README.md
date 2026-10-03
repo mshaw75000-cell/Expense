@@ -4,11 +4,29 @@ A phone app for work receipts. It runs in the browser and needs no install, acco
 
 1. **Snap** a receipt with the camera, or pick a photo from your library.
 2. **Crop**: the app finds the receipt's edges and straightens it. You can drag the corners to adjust. **Enhance** turns it into a clean black-and-white scan.
-3. **Read**: the app reads the receipt on the phone and fills in the **vendor**, **total**, **GST** and **date**. Check them and fix anything it got wrong (**Read again** re-scans).
-4. **Note** what it is and what it was for. The **expense type** is guessed from the receipt (fuel, parking, meals, travel…). Pick another from the list, or choose **Not listed – type it in…** to type your own when nothing fits.
-5. **Send**: tick the receipts you want, pick a saved email address, and send them as **one PDF expense report** (a summary page plus one page per receipt) or as separate photos.
+3. **Read**: the app reads the receipt on the phone and fills in the **vendor**, **total**, **GST**, **date** and a guessed **expense type**. Check them and fix anything it got wrong (**Read again** re-scans).
+4. **Complete**: add what it was for, choose the **business unit** (Mentis or Macrack), and add any **supporting photos** (invoice, booking confirmation, attendee list…).
+5. **Submit monthly**: receipts are grouped by the month of their date. Each month is one claim; tap **Submit claim** to email accounts a **PDF** (summary by business unit, every receipt and supporting photo) and an **Excel spreadsheet** of every line.
 
-Receipts are kept **only on your phone**, in the browser's storage. Sent receipts move to the **Sent** tab. You can delete them from Settings.
+Receipts are kept **only on your phone**, in the browser's storage.
+
+## Locking, reopening and exception reports
+
+- A submitted claim is **locked**: its receipts can be viewed but not changed or deleted.
+- **Reopen claim** (on the month, or on a locked receipt) unlocks it.
+- On **Resubmit**, the app compares the claim with what was last sent and adds an **exception report** to the PDF, the spreadsheet (Exceptions sheet) and the email: every receipt added, removed or changed, with old → new values, plus the previous and new totals.
+- Saving a new receipt into a month that has already been submitted asks to reopen that claim.
+- **Send copy** re-sends a submitted claim without changing anything.
+
+## Reconciliation
+
+Tap the bank icon at the top and choose a statement exported from online banking (**CSV**, OFX/QFX or QIF – PDF statements can't be read). The app matches each purchase with a claim (same amount, within 5 days) and lists:
+
+- **Incorrect claims** – the bank shows a different amount (or date) for the same vendor.
+- **Not claimed** – purchases with no claim. Mark them **Personal / not claimable**, or tap **Add claim** to photograph the receipt with the bank amount and date filled in.
+- **Not on statement** – claims with no matching purchase (paid another way, or wrong date/amount).
+
+**Share results (Excel)** exports the reconciliation.
 
 ## GST
 
@@ -60,5 +78,7 @@ To change the default colours for everyone, edit `--primary` and `--accent` at t
 | `app.js` | Screens, storage, sending |
 | `crop.js` | Receipt edge detection, perspective straightening, enhance |
 | `ocr.js` | Receipt reading: vendor, total, GST, date, ABN |
-| `pdf.js` | Builds the PDF expense report (no external libraries) |
+| `pdf.js` | Builds the PDF claim report (no external libraries) |
+| `xlsx.js` | Builds the Excel spreadsheets (no external libraries) |
+| `recon.js` | Reads bank statements and matches them to claims |
 | `sw.js`, `manifest.webmanifest`, `icon*` | Offline support and home-screen icon |

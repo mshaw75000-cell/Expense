@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=5">
+  <link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
   <header class="topbar">
@@ -21,6 +21,9 @@
       <span id="brandWord" class="wordmark">mentis</span>
     </div>
     <div class="topbar-title" id="viewTitle">Receipts</div>
+    <button class="icon-btn" id="reconBtn" aria-label="Reconcile bank statement" title="Reconcile">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h18M5 10V20M19 10V20M9 10v10M15 10v10M2 20h20M12 3l9 5H3z"/></svg>
+    </button>
     <button class="icon-btn" id="settingsBtn" aria-label="Settings">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </button>
@@ -29,20 +32,14 @@
   <!-- ===== List view ===== -->
   <main id="listView" class="view">
     <div class="tabs" role="tablist">
-      <button class="tab active" data-filter="pending">Pending</button>
-      <button class="tab" data-filter="sent">Sent</button>
-      <button class="tab" data-filter="all">All</button>
+      <button class="tab active" data-filter="open">To submit</button>
+      <button class="tab" data-filter="submitted">Submitted</button>
     </div>
-    <div class="summary" id="summary"></div>
-    <ul class="receipt-list" id="receiptList"></ul>
+    <div id="monthList"></div>
     <div class="empty" id="emptyState" hidden>
       <svg viewBox="0 0 24 24" width="56" height="56" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z"/><path d="M8 7h8M8 11h8M8 15h5"/></svg>
       <p>No receipts here yet.</p>
       <p class="muted">Tap the camera button to snap one.</p>
-    </div>
-    <div class="bottom-bar" id="selectBar" hidden>
-      <button class="btn ghost" id="selectAllBtn">Select all</button>
-      <button class="btn primary" id="sendBtn">Send</button>
     </div>
     <label class="fab" aria-label="Take photo of receipt">
       <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
@@ -76,6 +73,10 @@
   <!-- ===== Edit view ===== -->
   <section id="editView" class="view" hidden>
     <form id="editForm" class="form" autocomplete="off">
+      <div class="lock-banner" id="lockBanner" hidden>
+        <span id="lockMsg">This receipt is in a submitted claim.</span>
+        <button type="button" class="btn small" id="lockReopenBtn">Reopen claim</button>
+      </div>
       <div class="preview-wrap">
         <img id="editPreview" alt="Cropped receipt">
         <button type="button" class="btn small ghost" id="recropBtn">Re-crop</button>
@@ -88,10 +89,6 @@
       <label class="field">
         <span>Vendor</span>
         <input name="vendor" placeholder="e.g. Woolworths, Qantas, Cafe Roma">
-      </label>
-      <label class="field">
-        <span>What is it?</span>
-        <input name="description" placeholder="e.g. Client lunch, Taxi to airport">
       </label>
       <label class="field">
         <span>What was it for?</span>
@@ -118,6 +115,13 @@
         <p class="gst-warn" id="gstWarn" hidden>GST is more than the total – check the amounts.</p>
       </div>
 
+      <fieldset class="field">
+        <span>Business unit</span>
+        <div class="segmented" id="unitPicker">
+          <label><input type="radio" name="unit" value="Mentis"><span>Mentis</span></label>
+          <label><input type="radio" name="unit" value="Macrack"><span>Macrack</span></label>
+        </div>
+      </fieldset>
       <label class="field">
         <span>Date</span>
         <input name="date" type="date">
@@ -144,10 +148,20 @@
         <span>Expense type (type it in)</span>
         <input name="customCategory" id="customCategory" placeholder="e.g. Conference fees, Tolls, Gifts" maxlength="40">
       </label>
+      <div class="field">
+        <span>Supporting photos <em class="muted small" id="attachCount"></em></span>
+        <div class="attach-grid" id="attachGrid"></div>
+        <label class="btn ghost attach-add" id="attachAdd">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          Add supporting photo
+          <input type="file" id="attachInput" accept="image/*" multiple hidden>
+        </label>
+        <p class="muted small">e.g. invoice, booking confirmation, attendee list, parking ticket.</p>
+      </div>
       <div class="bottom-bar">
         <button type="button" class="btn ghost danger" id="deleteBtn" hidden>Delete</button>
         <button type="button" class="btn ghost" id="editCancel">Cancel</button>
-        <button type="submit" class="btn primary">Save</button>
+        <button type="submit" class="btn primary" id="saveBtn">Save</button>
       </div>
     </form>
   </section>
@@ -193,7 +207,7 @@
       <h3>Data</h3>
       <p class="muted">Receipts are stored only on this phone, inside this browser.</p>
       <div class="row">
-        <button type="button" class="btn ghost danger" id="clearSentBtn">Delete sent receipts</button>
+        <button type="button" class="btn ghost danger" id="clearSentBtn">Delete submitted claims from this phone</button>
       </div>
       <p class="muted small" id="appVersion"></p>
 
@@ -203,11 +217,37 @@
     </form>
   </section>
 
+  <!-- ===== Reconcile view ===== -->
+  <section id="reconView" class="view" hidden>
+    <div class="recon-intro">
+      <p>Check your claims against a bank or credit card statement. Export the statement from your online banking as <strong>CSV</strong> (or OFX / QIF) and choose it here – it's read on this phone only.</p>
+      <label class="btn primary">
+        Choose statement file
+        <input type="file" id="stmtInput" accept=".csv,.ofx,.qfx,.qif,.txt,text/csv,text/plain" hidden>
+      </label>
+    </div>
+    <div id="reconResult"></div>
+    <div class="bottom-bar">
+      <button type="button" class="btn ghost" id="reconDone">Back</button>
+      <button type="button" class="btn primary" id="reconExport" disabled>Share results (Excel)</button>
+    </div>
+  </section>
+
+  <!-- ===== Photo viewer ===== -->
+  <div class="viewer" id="viewer" hidden>
+    <img id="viewerImg" alt="Supporting photo">
+    <div class="viewer-bar">
+      <button type="button" class="btn ghost light danger" id="viewerRemove">Remove</button>
+      <button type="button" class="btn primary" id="viewerClose">Close</button>
+    </div>
+  </div>
+
   <!-- ===== Send sheet ===== -->
   <div class="sheet-backdrop" id="sendSheet" hidden>
     <div class="sheet" role="dialog" aria-labelledby="sendTitle">
-      <h2 id="sendTitle">Send receipts</h2>
+      <h2 id="sendTitle">Submit claim</h2>
       <p class="muted" id="sendSummary"></p>
+      <div class="exceptions-box" id="sendExceptions" hidden></div>
       <label class="field">
         <span>Send to</span>
         <select id="sendTo"></select>
@@ -216,11 +256,7 @@
         <span>New email address</span>
         <input type="email" id="sendToNew" placeholder="name@mentis.com">
       </label>
-      <fieldset class="field">
-        <span>Attach as</span>
-        <label class="radio"><input type="radio" name="fmt" value="pdf" checked> One PDF expense report</label>
-        <label class="radio"><input type="radio" name="fmt" value="jpg"> Separate photos</label>
-      </fieldset>
+      <p class="small attach-note">📎 Attaches the <strong>PDF claim</strong> (summary, receipts and supporting photos) and an <strong>Excel spreadsheet</strong> of every line.</p>
       <div class="row">
         <button class="btn ghost" id="sendCancel">Cancel</button>
         <button class="btn primary" id="sendGo">Send</button>
@@ -232,9 +268,11 @@
   <div class="toast" id="toast" hidden></div>
   <div class="busy" id="busy" hidden><div class="spinner"></div></div>
 
-  <script src="ocr.js?v=5"></script>
-  <script src="pdf.js?v=5"></script>
-  <script src="crop.js?v=5"></script>
-  <script src="app.js?v=5"></script>
+  <script src="ocr.js?v=6"></script>
+  <script src="pdf.js?v=6"></script>
+  <script src="xlsx.js?v=6"></script>
+  <script src="recon.js?v=6"></script>
+  <script src="crop.js?v=6"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>

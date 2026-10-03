@@ -7,7 +7,7 @@
   const WINANSI = { '€': 0x80, '‚': 0x82, '„': 0x84, '…': 0x85, '‘': 0x91, '’': 0x92, '“': 0x93, '”': 0x94, '•': 0x95, '–': 0x96, '—': 0x97, '™': 0x99 };
   function toAnsi(s) {
     let out = '';
-    for (const ch of String(s ?? '')) {
+    for (const ch of String(s ?? '').replace(/→/g, '->').replace(/✎/g, '')) {
       const c = ch.codePointAt(0);
       if (WINANSI[ch]) out += String.fromCharCode(WINANSI[ch]);
       else if (c === 9 || c === 10 || c === 13) out += ' ';
@@ -77,18 +77,22 @@
   }
 
   /**
-   * receipts: [{ jpeg: Uint8Array, w, h, description, purpose, amount, date, category }]
+   * Monthly claim report.
+   * receipts: [{ ref, unit, jpeg, w, h, vendor, purpose, category, amount, gst, date, abn,
+   *              attachments: [{ jpeg, w, h }] }]  – already in report order
+   * exceptions: [{ ref, type, vendor, detail }] – only on a resubmission
    */
-  function buildExpenseReport({ name, receipts, primary = '#0b2a4a', accent = '#00a6a6', brand = 'mentis' }) {
+  function buildClaimReport({ name, monthLabel, submissionNo = 1, previous = null, receipts, exceptions = [],
+    primary = '#0b2a4a', accent = '#00a6a6', brand = 'mentis' }) {
     const pages = [];
-    const muted = '#677585', ink = '#13202e';
-    const total = receipts.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
-    const totalGst = receipts.reduce((s, r) => s + (parseFloat(r.gst) || 0), 0);
+    const muted = '#677585', ink = '#13202e', warn = '#b26a00';
+    const sum = (list, k) => list.reduce((t, r) => t + (parseFloat(r[k]) || 0), 0);
     const hasGst = r => r.gst !== '' && r.gst != null && !isNaN(parseFloat(r.gst));
     const exOf = r => (r.amount === '' || r.amount == null) ? '' : (parseFloat(r.amount) || 0) - (parseFloat(r.gst) || 0);
-    const title = r => [r.vendor, r.description].filter(Boolean).join(' – ') || '(no description)';
-    const dates = receipts.map(r => r.date).filter(Boolean).sort();
-    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const today = new Date().toLocaleDateString('en-AU', { year: 'numeric', month: 'long', day: 'numeric' });
+    const units = [...new Set(receipts.map(r => r.unit || 'Unassigned'))];
+    const total = sum(receipts, 'amount'), totalGst = sum(receipts, 'gst');
+    const resub = submissionNo > 1;
 
     function header(p, title) {
       p.rect(0, 0, PAGE_W, 64, primary);
@@ -98,86 +102,164 @@
     }
     function footer(p, i, n) {
       p.line(M, PAGE_H - 34, PAGE_W - M, '#dfe4ea');
-      p.text(`${name || ''}${name ? '  ·  ' : ''}Generated ${today}`, M, PAGE_H - 20, { size: 8, color: muted });
+      p.text(`${name || ''}${name ? '  ·  ' : ''}${monthLabel} claim${resub ? ` (resubmission ${submissionNo - 1})` : ''}  ·  Generated ${today}`, M, PAGE_H - 20, { size: 8, color: muted });
       p.text(`Page ${i} of ${n}`, PAGE_W - M, PAGE_H - 20, { size: 8, color: muted, align: 'right' });
     }
 
-    // ---- Summary page(s) ----
-    const cols = { date: M, desc: M + 62, ex: PAGE_W - M - 150, gst: PAGE_W - M - 82, amt: PAGE_W - M };
+    // ---- Summary ----
+    const cols = { ref: M + 4, date: M + 34, desc: M + 82, ex: PAGE_W - M - 150, gst: PAGE_W - M - 82, amt: PAGE_W - M };
     let p = new Page(); pages.push(p);
-    header(p, 'Expense Report');
+    header(p, 'Expense Claim');
     let y = 100;
-    p.text(name || 'Expense report', M, y, { size: 18, bold: true, color: ink }); y += 20;
-    const range = dates.length ? (dates[0] === dates[dates.length - 1] ? fmtDate(dates[0]) : `${fmtDate(dates[0])} – ${fmtDate(dates[dates.length - 1])}`) : '';
-    p.text(`${receipts.length} receipt${receipts.length === 1 ? '' : 's'}${range ? '  ·  ' + range : ''}`, M, y, { size: 11, color: muted }); y += 30;
+    p.text(`${name || 'Expense claim'} – ${monthLabel}`, M, y, { size: 18, bold: true, color: ink }); y += 18;
+    p.text(`${receipts.length} receipt${receipts.length === 1 ? '' : 's'}  ·  ${units.join(', ')}`, M, y, { size: 11, color: muted }); y += 16;
+    if (resub) {
+      p.rect(M, y - 4, PAGE_W - 2 * M, 34, '#fff4e0');
+      p.text(`RESUBMISSION ${submissionNo - 1} – replaces the claim sent ${previous ? previous.date : 'earlier'}`, M + 10, y + 10, { size: 10, bold: true, color: warn });
+      p.text(`${exceptions.length} change${exceptions.length === 1 ? '' : 's'} since then – see the exception report.`, M + 10, y + 23, { size: 9, color: ink });
+      y += 40;
+    }
+    y += 14;
 
     const tableHead = () => {
       p.rect(M, y - 14, PAGE_W - 2 * M, 22, '#eef1f5');
-      p.text('DATE', cols.date + 6, y + 1, { size: 8, bold: true, color: muted });
-      p.text('VENDOR / DESCRIPTION / PURPOSE', cols.desc, y + 1, { size: 8, bold: true, color: muted });
+      p.text('REF', cols.ref, y + 1, { size: 8, bold: true, color: muted });
+      p.text('DATE', cols.date, y + 1, { size: 8, bold: true, color: muted });
+      p.text('VENDOR / EXPENSE TYPE / PURPOSE', cols.desc, y + 1, { size: 8, bold: true, color: muted });
       p.text('EX GST', cols.ex - 6, y + 1, { size: 8, bold: true, color: muted, align: 'right' });
       p.text('GST', cols.gst - 6, y + 1, { size: 8, bold: true, color: muted, align: 'right' });
       p.text('TOTAL', cols.amt - 6, y + 1, { size: 8, bold: true, color: muted, align: 'right' });
       y += 24;
     };
+    const newPage = () => { p = new Page(); pages.push(p); header(p, 'Expense Claim (cont.)'); y = 100; };
     tableHead();
-    receipts.forEach((r, i) => {
-      const descW = cols.ex - cols.desc - 60;
-      const sub = [r.category, r.purpose].filter(Boolean).join(' · ');
-      const purposeLines = sub ? wrap(sub, 9, descW).slice(0, 3) : [];
-      const rowH = 16 + purposeLines.length * 11 + 8;
-      if (y + rowH > PAGE_H - 90) {
-        p = new Page(); pages.push(p); header(p, 'Expense Report (cont.)'); y = 100; tableHead();
+    for (const unit of units) {
+      const list = receipts.filter(r => (r.unit || 'Unassigned') === unit);
+      if (y + 60 > PAGE_H - 90) { newPage(); tableHead(); }
+      p.text(unit.toUpperCase(), M + 4, y, { size: 10, bold: true, color: primary });
+      y += 16;
+      for (const r of list) {
+        const descW = cols.ex - cols.desc - 60;
+        const sub = [r.category, r.purpose].filter(Boolean).join(' · ');
+        const subLines = sub ? wrap(sub, 9, descW).slice(0, 3) : [];
+        const rowH = 16 + subLines.length * 11 + 8;
+        if (y + rowH > PAGE_H - 90) { newPage(); tableHead(); }
+        p.text(r.ref, cols.ref, y, { size: 9, color: muted });
+        p.text(fmtDate(r.date, true), cols.date, y, { size: 10, color: ink });
+        p.text(fit(r.vendor || '(no vendor)', 10, descW, true), cols.desc, y, { size: 10, bold: true, color: ink });
+        p.text(money(exOf(r)), cols.ex - 6, y, { size: 10, color: ink, align: 'right' });
+        p.text(hasGst(r) ? money(r.gst) : '–', cols.gst - 6, y, { size: 10, color: ink, align: 'right' });
+        p.text(money(r.amount), cols.amt - 6, y, { size: 10, bold: true, color: ink, align: 'right' });
+        let yy = y + 13;
+        for (const l of subLines) { p.text(l, cols.desc, yy, { size: 9, color: muted }); yy += 11; }
+        y += rowH;
+        p.line(M, y - 12, PAGE_W - M, '#dfe4ea');
       }
-      p.text(fmtDate(r.date, true), cols.date + 6, y, { size: 10, color: ink });
-      p.text(fit(`${i + 1}. ${title(r)}`, 10, descW, true), cols.desc, y, { size: 10, bold: true, color: ink });
-      p.text(money(exOf(r)), cols.ex - 6, y, { size: 10, color: ink, align: 'right' });
-      p.text(hasGst(r) ? money(r.gst) : '–', cols.gst - 6, y, { size: 10, color: ink, align: 'right' });
-      p.text(money(r.amount), cols.amt - 6, y, { size: 10, bold: true, color: ink, align: 'right' });
-      let yy = y + 13;
-      for (const l of purposeLines) { p.text(l, cols.desc, yy, { size: 9, color: muted }); yy += 11; }
-      y += rowH;
-      p.line(M, y - 12, PAGE_W - M, '#dfe4ea');
+      const ut = sum(list, 'amount'), ug = sum(list, 'gst');
+      p.text(`${unit} subtotal`, cols.desc, y, { size: 10, bold: true, color: primary });
+      p.text(money(ut - ug), cols.ex - 6, y, { size: 10, bold: true, color: ink, align: 'right' });
+      p.text(money(ug), cols.gst - 6, y, { size: 10, bold: true, color: ink, align: 'right' });
+      p.text(money(ut), cols.amt - 6, y, { size: 10, bold: true, color: ink, align: 'right' });
+      y += 26;
+    }
+    if (y + 90 + units.length * 16 > PAGE_H - 50) newPage();
+    const bx = PAGE_W - M - 240;
+    units.forEach(u => {
+      const list = receipts.filter(r => (r.unit || 'Unassigned') === u);
+      p.text(`${u}`, bx + 12, y, { size: 10, color: muted });
+      p.text(money(sum(list, 'amount')), PAGE_W - M - 12, y, { size: 10, color: ink, align: 'right' });
+      y += 16;
     });
-    if (y + 80 > PAGE_H - 50) { p = new Page(); pages.push(p); header(p, 'Expense Report (cont.)'); y = 100; }
-    const bx = PAGE_W - M - 220;
-    p.text('Total ex GST', bx + 12, y + 6, { size: 10, color: muted });
-    p.text(money(total - totalGst) || '$0.00', PAGE_W - M - 12, y + 6, { size: 10, color: ink, align: 'right' });
-    p.text('GST', bx + 12, y + 22, { size: 10, color: muted });
-    p.text(money(totalGst) || '$0.00', PAGE_W - M - 12, y + 22, { size: 10, color: ink, align: 'right' });
-    y += 32;
-    p.rect(bx, y - 6, 220, 30, primary);
-    p.text('TOTAL (INC GST)', bx + 12, y + 13, { size: 10, bold: true, color: '#ffffff' });
-    p.text(money(total) || '$0.00', PAGE_W - M - 12, y + 13, { size: 13, bold: true, color: '#ffffff', align: 'right' });
+    p.text('Total ex GST', bx + 12, y, { size: 10, color: muted });
+    p.text(money(total - totalGst) || '$0.00', PAGE_W - M - 12, y, { size: 10, color: ink, align: 'right' }); y += 16;
+    p.text('GST', bx + 12, y, { size: 10, color: muted });
+    p.text(money(totalGst) || '$0.00', PAGE_W - M - 12, y, { size: 10, color: ink, align: 'right' }); y += 12;
+    p.rect(bx, y, 240, 30, primary);
+    p.text('TOTAL CLAIM (INC GST)', bx + 12, y + 19, { size: 10, bold: true, color: '#ffffff' });
+    p.text(money(total) || '$0.00', PAGE_W - M - 12, y + 19, { size: 13, bold: true, color: '#ffffff', align: 'right' });
+    y += 60;
+    if (y + 40 < PAGE_H - 50) {
+      p.text('I confirm these expenses were incurred for business purposes.', M, y, { size: 9, color: muted }); y += 26;
+      p.line(M, y, M + 200, '#13202e', 0.5);
+      p.text(`${name || 'Claimant'}  ·  ${today}`, M, y + 12, { size: 9, color: muted });
+    }
 
-    // ---- One page per receipt ----
-    receipts.forEach((r, i) => {
+    // ---- Exception report (resubmissions) ----
+    if (resub) {
+      newPage();
+      header(p, 'Exception Report');
+      y = 100;
+      p.text(`Changes since the ${monthLabel} claim was submitted`, M, y, { size: 16, bold: true, color: ink }); y += 18;
+      p.text(`Previously submitted ${previous ? previous.date : ''}${previous && previous.to ? ' to ' + previous.to : ''}  ·  This is resubmission ${submissionNo - 1}`, M, y, { size: 10, color: muted }); y += 24;
+      if (previous) {
+        const diff = total - previous.total;
+        p.text(`Previous total ${money(previous.total)}   →   New total ${money(total)}   (${diff >= 0 ? '+' : '–'}${money(Math.abs(diff))})`, M, y, { size: 11, bold: true, color: diff ? warn : ink }); y += 26;
+      }
+      const head = () => {
+        p.rect(M, y - 14, PAGE_W - 2 * M, 22, '#eef1f5');
+        p.text('REF', M + 4, y + 1, { size: 8, bold: true, color: muted });
+        p.text('CHANGE', M + 40, y + 1, { size: 8, bold: true, color: muted });
+        p.text('VENDOR', M + 110, y + 1, { size: 8, bold: true, color: muted });
+        p.text('DETAIL', M + 240, y + 1, { size: 8, bold: true, color: muted });
+        y += 24;
+      };
+      head();
+      if (!exceptions.length) { p.text('No line changes – resent as submitted.', M + 4, y, { size: 10, color: muted }); y += 16; }
+      for (const e of exceptions) {
+        const lines = wrap(e.detail, 9, PAGE_W - M - (M + 240)).slice(0, 4);
+        const rowH = Math.max(16, lines.length * 12) + 8;
+        if (y + rowH > PAGE_H - 60) { newPage(); header(p, 'Exception Report (cont.)'); y = 100; head(); }
+        p.text(e.ref || '', M + 4, y, { size: 9, color: muted });
+        p.text(e.type, M + 40, y, { size: 9, bold: true, color: e.type === 'Removed' ? '#c0392b' : e.type === 'Added' ? '#047878' : warn });
+        p.text(fit(e.vendor || '', 9, 125), M + 110, y, { size: 9, color: ink });
+        lines.forEach((l, k) => p.text(l, M + 240, y + k * 12, { size: 9, color: ink }));
+        y += rowH;
+        p.line(M, y - 12, PAGE_W - M, '#dfe4ea');
+      }
+    }
+
+    // ---- Receipt pages, each followed by its supporting photos ----
+    const imagePage = (title, heading, img, info) => {
       const pg = new Page(); pages.push(pg);
-      header(pg, `Receipt ${i + 1} of ${receipts.length}`);
+      header(pg, title);
       let yy = 98;
-      const amt = money(r.amount);
-      const amtW = amt ? textWidth(amt, 16, true) + 12 : 0;
-      for (const l of wrap(r.vendor || r.description || '(no description)', 16, PAGE_W - 2 * M - amtW, true).slice(0, 2)) {
-        pg.text(l, M, yy, { size: 16, bold: true, color: ink }); yy += 19;
-      }
-      if (amt) {
-        pg.text(amt, PAGE_W - M, 98, { size: 16, bold: true, color: accent, align: 'right' });
-        pg.text(`GST ${hasGst(r) ? money(r.gst) : '$0.00'}  ·  Ex GST ${money(exOf(r))}`, PAGE_W - M, 113, { size: 9, color: muted, align: 'right' });
-      }
-      if (r.vendor && r.description) { pg.text(r.description, M, yy, { size: 11, bold: true, color: primary }); yy += 15; }
-      pg.text([fmtDate(r.date), r.category, r.abn ? 'ABN ' + r.abn : ''].filter(Boolean).join('  ·  '), M, yy, { size: 10, color: muted }); yy += 18;
-      if (r.purpose) {
-        pg.text('Purpose:', M, yy, { size: 10, bold: true, color: primary });
-        const lines = wrap(r.purpose, 10, PAGE_W - 2 * M - 52).slice(0, 4);
-        lines.forEach((l, k) => pg.text(l, M + 52, yy + k * 13, { size: 10, color: ink }));
-        yy += lines.length * 13 + 4;
-      }
-      yy += 8;
+      yy = heading(pg, yy);
       const boxW = PAGE_W - 2 * M, boxH = PAGE_H - 50 - yy;
-      const s = Math.min(boxW / r.w, boxH / r.h);
-      const iw = r.w * s, ih = r.h * s;
+      const sc = Math.min(boxW / img.w, boxH / img.h);
+      const iw = img.w * sc, ih = img.h * sc;
       pg.rect(M + (boxW - iw) / 2 - 1, yy - 1, iw + 2, ih + 2, '#dfe4ea');
-      pg.image(r, M + (boxW - iw) / 2, yy, iw, ih);
+      pg.image(img, M + (boxW - iw) / 2, yy, iw, ih);
+    };
+    receipts.forEach(r => {
+      imagePage(`${r.ref} · ${r.unit || ''}`, (pg, yy) => {
+        const amt = money(r.amount);
+        const amtW = amt ? textWidth(amt, 16, true) + 12 : 0;
+        for (const l of wrap(r.vendor || '(no vendor)', 16, PAGE_W - 2 * M - amtW, true).slice(0, 2)) {
+          pg.text(l, M, yy, { size: 16, bold: true, color: ink }); yy += 19;
+        }
+        if (amt) {
+          pg.text(amt, PAGE_W - M, 98, { size: 16, bold: true, color: accent, align: 'right' });
+          pg.text(`GST ${hasGst(r) ? money(r.gst) : '$0.00'}  ·  Ex GST ${money(exOf(r))}`, PAGE_W - M, 113, { size: 9, color: muted, align: 'right' });
+        }
+        pg.text([fmtDate(r.date), r.unit, r.category, r.abn ? 'ABN ' + r.abn : ''].filter(Boolean).join('  ·  '), M, yy, { size: 10, color: muted }); yy += 18;
+        if (r.purpose) {
+          pg.text('Purpose:', M, yy, { size: 10, bold: true, color: primary });
+          const lines = wrap(r.purpose, 10, PAGE_W - 2 * M - 52).slice(0, 4);
+          lines.forEach((l, k) => pg.text(l, M + 52, yy + k * 13, { size: 10, color: ink }));
+          yy += lines.length * 13 + 4;
+        }
+        if (r.attachments && r.attachments.length) {
+          pg.text(`${r.attachments.length} supporting document${r.attachments.length === 1 ? '' : 's'} on the following page${r.attachments.length === 1 ? '' : 's'}`, M, yy, { size: 9, color: muted }); yy += 14;
+        }
+        return yy + 8;
+      }, r);
+      (r.attachments || []).forEach((a, k) => {
+        imagePage(`${r.ref} · supporting ${k + 1}/${r.attachments.length}`, (pg, yy) => {
+          pg.text(`Supporting document ${k + 1} of ${r.attachments.length}`, M, yy, { size: 14, bold: true, color: ink }); yy += 17;
+          pg.text(`For ${r.ref}: ${r.vendor || ''}  ·  ${fmtDate(r.date)}  ·  ${money(r.amount)}`, M, yy, { size: 10, color: muted });
+          return yy + 16;
+        }, a);
+      });
     });
 
     pages.forEach((pg, i) => footer(pg, i + 1, pages.length));
@@ -189,8 +271,8 @@
     const [y, m, d] = iso.split('-').map(Number);
     const dt = new Date(y, m - 1, d);
     return short
-      ? dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-      : dt.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+      ? dt.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
+      : dt.toLocaleDateString('en-AU', { year: 'numeric', month: 'short', day: 'numeric' });
   }
 
   function serialize(pages) {
@@ -232,5 +314,5 @@
     return new Blob(chunks, { type: 'application/pdf' });
   }
 
-  window.ExpensePdf = { buildExpenseReport, money };
+  window.ExpensePdf = { buildClaimReport, money, fmtDate };
 })();
