@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '14';
+  const APP_VERSION = '15';
   const UNITS = ['Mentis', 'Macrack'];
 
   /* ---------------- Storage ---------------- */
@@ -87,17 +87,23 @@
        submitted – sent; its receipts are locked
        reopened  – unlocked after submitting; resubmitting includes an exception report */
   const monthOf = r => (r.date || todayISO()).slice(0, 7);
-  const monthLabel = m => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1, 1).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' }); };
+  /* A month has up to two claims: company card (key '2026-09') and personal reimbursement ('2026-09~personal'),
+     each submitted, locked and reopened on its own. */
+  const PERSONAL = '~personal';
+  const isPersonalKey = k => String(k).endsWith(PERSONAL);
+  const monthOfKey = k => String(k).replace(PERSONAL, '');
+  const claimKeyOf = r => monthOf(r) + (r.payment === 'personal' ? PERSONAL : '');
+  const monthLabel = k => { const [y, mo] = monthOfKey(k).split('-').map(Number); return new Date(y, mo - 1, 1).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' }) + (isPersonalKey(k) ? ' – personal reimbursement' : ''); };
   async function getClaim(month) { return (await db.claims.get(month)) || { month, status: 'open', submissions: [] }; }
   async function isLocked(month) { return (await getClaim(month)).status === 'submitted'; }
 
   // What accounts sees as a change: these fields, compared with the last submission.
   const TRACKED = [
     ['date', 'Date'], ['vendor', 'Vendor'], ['purpose', 'Purpose'], ['unit', 'Business unit'], ['category', 'Expense type'],
-    ['amount', 'Total (AUD)'], ['gst', 'GST'], ['currency', 'Currency'], ['fxAmount', 'Foreign amount'], ['audBasis', 'AUD amount basis'], ['hasReceipt', 'Receipt'], ['attachCount', 'Supporting documents'], ['imageVer', 'Receipt image'], ['attendeesText', 'Attendees'], ['abn', 'Supplier ABN'],
+    ['amount', 'Total (AUD)'], ['gst', 'GST'], ['currency', 'Currency'], ['fxAmount', 'Foreign amount'], ['audBasis', 'AUD amount basis'], ['hasReceipt', 'Receipt'], ['attachCount', 'Supporting documents'], ['imageVer', 'Receipt image'], ['attendeesText', 'Attendees'], ['abn', 'Supplier ABN'], ['travelStatus', 'Employee travelling'],
   ];
   const snapshotOf = (r, ref) => ({
-    id: r.lineKey || r.id, ref, attendeesText: r.attendeesText || '', abn: r.abn || '', date: r.date || '', vendor: r.vendor || '', purpose: r.purpose || '', unit: r.unit || '', category: r.category || '',
+    id: r.lineKey || r.id, ref, attendeesText: r.attendeesText || '', abn: r.abn || '', travelStatus: travelText(r), date: r.date || '', vendor: r.vendor || '', purpose: r.purpose || '', unit: r.unit || '', category: r.category || '',
     amount: r.amount || '', gst: r.gst || '', currency: r.currency || 'AUD', fxAmount: r.fxAmount || '', audBasis: r.audBasis || '', hasReceipt: !!r.image, attachCount: (r.attachments || []).length, imageVer: r.imageVer || 0,
   });
   const showVal = (k, v) => (k === 'amount' || k === 'gst') ? (v === '' ? '(blank)' : money(v)) : k === 'imageVer' ? 'version ' + (v + 1) : k === 'date' ? fmtDay(v) : (v === '' ? '(blank)' : String(v));
@@ -205,12 +211,16 @@
   }
 
   /* ----- Attendees / employees travelling ----- */
-  const MEAL_CATS = ['Meals & Entertainment'];
+  const ENT_CATS = ['Meals & Entertainment'];
+  const EMP_MEAL_CATS = ['Employee Meals – Travelling', 'Employee Meals – Not Travelling'];
+  const MEAL_CATS = [...ENT_CATS, ...EMP_MEAL_CATS];
   const TRAVEL_CATS = ['Travel – Air', 'Travel – Ground', 'Lodging'];
   const PERSON_TYPES = ['Employee', 'Client', 'Supplier', 'Other'];
   const peopleText = list => (list || []).filter(p => p.name).map(p => `${p.name}${p.org || p.type ? ` (${[p.org, p.type && p.type.toLowerCase()].filter(Boolean).join(', ')})` : ''}`).join('; ');
   const catsOf = r => (r.splits && r.splits.length ? r.splits.map(s => s.category) : [r.category]);
   const needsPeople = r => catsOf(r).some(c => MEAL_CATS.includes(c) || TRAVEL_CATS.includes(c));
+  const isEntertainment = r => catsOf(r).some(c => ENT_CATS.includes(c));
+  const travelText = r => !isEntertainment(r) ? '' : r.travelStatus === 'travelling' ? 'Employee travelling' : r.travelStatus === 'not' ? 'Employee not travelling' : '';
 
   /* ----- Split bills -----
      A receipt can be split into lines (e.g. hotel: room / meals / parking), each with its own expense type,
@@ -218,7 +228,7 @@
   const hasSplits = r => Array.isArray(r.splits) && r.splits.length > 1;
   function linesOf(r) {
     const v = audView(r);
-    const base = { ...v, lineKey: r.id, receiptTotal: v.amount, receiptGst: v.gst, attendeesText: peopleText(r.attendees), taxInvIssue: taxInvoiceIssue(r) };
+    const base = { ...v, lineKey: r.id, receiptTotal: v.amount, receiptGst: v.gst, attendeesText: peopleText(r.attendees), taxInvIssue: taxInvoiceIssue(r), travelText: travelText(r) };
     if (!hasSplits(r)) return [base];
     const total = parseFloat(r.amount) || 0;
     const k = v.amount === '' ? null : total ? (parseFloat(v.amount) || 0) / total : 1; // receipt currency → AUD
@@ -282,19 +292,19 @@
   let thumbUrls = [];
   const search = { text: '', unit: '', cat: '', flag: '' }; // flag: 'tofollow' | 'taxinv' | 'dup' | 'people'
   const LOCK_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
-  const FLAG_LABELS = { tofollow: 'receipts still to follow', taxinv: 'over $82.50 without a tax invoice', dup: 'possible duplicates', people: 'meals / travel without attendees' };
+  const FLAG_LABELS = { tofollow: 'receipts still to follow', taxinv: 'over $82.50 without a tax invoice', dup: 'possible duplicates', people: 'meals / travel missing attendees or travel status' };
   const searching = () => !!(search.text || search.unit || search.cat || search.flag);
 
   function matchesSearch(r, flags) {
     if (search.flag === 'tofollow' && r.image) return false;
     if (search.flag === 'taxinv' && !taxInvoiceIssue(r)) return false;
     if (search.flag === 'dup' && !flags.dup.has(r.id)) return false;
-    if (search.flag === 'people' && !(needsPeople(r) && !(r.attendees || []).some(p => p.name))) return false;
+    if (search.flag === 'people' && !((needsPeople(r) && !(r.attendees || []).some(p => p.name)) || (isEntertainment(r) && !r.travelStatus))) return false;
     const ls = linesOf(r);
     if (search.unit && !ls.some(l => l.unit === search.unit)) return false;
     if (search.cat && !ls.some(l => l.category === search.cat)) return false;
     if (search.text) {
-      const hay = [r.vendor, r.purpose, r.category, r.abn, r.currency, peopleText(r.attendees), r.date, fmtDay(r.date),
+      const hay = [r.vendor, r.purpose, r.category, r.abn, r.payment === 'personal' ? 'personal reimbursement' : 'company card', r.currency, peopleText(r.attendees), r.date, fmtDay(r.date),
         ...ls.map(l => [l.category, l.unit, l.amount, l.purpose].join(' ')), r.amount, audView(r).amount].join(' ').toLowerCase();
       const words = search.text.toLowerCase().replace(/\$/g, '').split(/\s+/).filter(Boolean);
       if (!words.every(w => hay.includes(w))) return false;
@@ -320,7 +330,7 @@
     const months = new Map();
     for (const r of all) {
       if (searching() && !matchesSearch(r, flags)) continue;
-      const m = monthOf(r); if (!months.has(m)) months.set(m, []); months.get(m).push(r);
+      const m = claimKeyOf(r); if (!months.has(m)) months.set(m, []); months.get(m).push(r);
     }
     if (!searching()) for (const c of claims) if (!months.has(c.month) && c.status === 'reopened') months.set(c.month, []);
 
@@ -336,7 +346,7 @@
     thumbUrls = [];
     const wrap = $('monthList');
     wrap.innerHTML = '';
-    const keys = [...months.keys()].sort().reverse();
+    const keys = [...months.keys()].sort((a, b) => monthOfKey(b).localeCompare(monthOfKey(a)) || (isPersonalKey(a) ? 1 : 0) - (isPersonalKey(b) ? 1 : 0));
     let shown = 0;
     for (const m of keys) {
       const claim = claimMap.get(m) || { month: m, status: 'open', submissions: [] };
@@ -363,7 +373,7 @@
       sec.innerHTML = `
         <div class="month-head">
           <div>
-            <h2>${monthLabel(m)}</h2>
+            <h2>${monthLabel(monthOfKey(m))}${isPersonalKey(m) ? ' <span class="pay-chip">Personal reimbursement</span>' : months.has(m + PERSONAL) ? ' <span class="pay-chip company">Company card</span>' : ''}</h2>
             <div class="month-meta">${plural(recs.length, 'receipt')}${byUnit.map(([u, v]) => ` · ${u} ${money(v)}`).join('')}${unassigned ? ` · <span class="warn">${unassigned} without business unit</span>` : ''}${noReceipt ? ` · <span class="warn">${plural(noReceipt, 'receipt')} to follow</span>` : ''}${needAud ? ` · <span class="warn">${needAud} need${needAud === 1 ? 's' : ''} AUD amount</span>` : ''}${estAud ? ` · <span class="est">${estAud} AUD estimated</span>` : ''}</div>
           </div>
           <div class="month-total">${money(total) || '$0.00'}${status}</div>
@@ -391,6 +401,7 @@
           taxInvoiceIssue(r) ? '<span class="tag warn-tag">No tax invoice</span>' : '',
           needsPeople(r) && !people ? '<span class="tag warn-tag">No attendees</span>' : '',
           r.recurringFrom || r.recurring ? '<span class="tag">Monthly</span>' : '',
+          isEntertainment(r) && !r.travelStatus ? '<span class="tag warn-tag">Travelling?</span>' : '',
         ].join('');
         li.innerHTML = `
           ${url ? `<img class="thumb" src="${url}" alt="">` : `<div class="thumb thumb-missing"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z"/><path d="M8 7h8M8 11h8M8 15h5"/></svg><span>To follow</span></div>`}
@@ -417,16 +428,16 @@
     const box = $('reminders');
     if (remindersHidden || searching()) { box.innerHTML = ''; return; }
     const cur = todayISO().slice(0, 7);
-    const open = all.filter(r => statusOf(monthOf(r)) !== 'submitted');
+    const open = all.filter(r => statusOf(claimKeyOf(r)) !== 'submitted');
     const items = [];
-    const overdue = [...new Set(open.map(monthOf))].filter(m => m < cur).sort();
+    const overdue = [...new Set(open.map(claimKeyOf))].filter(m => monthOfKey(m) < cur).sort();
     for (const m of overdue) items.push(`<button class="rem" data-rem="submit" data-month="${m}"><b>⏰ ${monthLabel(m)}</b> hasn’t been submitted yet – submit it</button>`);
     const toFollow = open.filter(r => !r.image).length;
     if (toFollow) items.push(`<button class="rem" data-rem="tofollow">📎 ${plural(toFollow, 'receipt')} still to follow</button>`);
     const taxinv = open.filter(r => taxInvoiceIssue(r)).length;
     if (taxinv) items.push(`<button class="rem" data-rem="taxinv">⚠ ${taxinv} over $82.50 without a tax invoice</button>`);
-    const people = open.filter(r => needsPeople(r) && !(r.attendees || []).some(p => p.name)).length;
-    if (people) items.push(`<button class="rem" data-rem="people">👥 ${people} meal / travel claim${people === 1 ? '' : 's'} without attendees</button>`);
+    const people = open.filter(r => (needsPeople(r) && !(r.attendees || []).some(p => p.name)) || (isEntertainment(r) && !r.travelStatus)).length;
+    if (people) items.push(`<button class="rem" data-rem="people">👥 ${people} meal / travel claim${people === 1 ? '' : 's'} missing attendees or travel status</button>`);
     const dups = open.filter(r => flags.dup.has(r.id)).length;
     if (dups) items.push(`<button class="rem" data-rem="dup">⚠ ${dups} possible duplicate${dups === 1 ? '' : 's'}</button>`);
     box.innerHTML = items.length ? `<div class="rem-box">${items.join('')}<button class="rem-hide" id="remHide" aria-label="Hide reminders">Hide</button></div>` : '';
@@ -818,6 +829,9 @@
     setCategory(editing.category || '');
     categoryTouched = !!editing.category;
     setUnit(editing.unit || '');
+    document.querySelectorAll('#payPicker input').forEach(i => { i.checked = i.value === (editing.payment || 'company'); });
+    $('payNote').hidden = editing.payment !== 'personal';
+    document.querySelectorAll('#travelPicker input').forEach(i => { i.checked = i.value === editing.travelStatus; });
     f.abn.value = editing.abn ? fmtAbn(editing.abn) || editing.abn : '';
     f.taxInvoiceOk.checked = !!editing.taxInvoiceOk;
     splits = hasSplits(editing) ? editing.splits.map(x => ({ ...x })) : [];
@@ -842,7 +856,7 @@
 
   /** Receipts in a submitted claim are read-only until the claim is reopened. */
   async function applyLock() {
-    const month = monthOf(editing);
+    const month = claimKeyOf(editing);
     editLocked = !editing.isNew && await isLocked(month);
     const f = $('editForm');
     f.querySelectorAll('input, textarea, select').forEach(el => { el.disabled = editLocked; });
@@ -857,7 +871,7 @@
     $('editCancel').textContent = editLocked ? 'Back' : 'Cancel';
   }
   $('lockReopenBtn').onclick = async () => {
-    if (await reopenClaim(monthOf(editing))) await applyLock();
+    if (await reopenClaim(claimKeyOf(editing))) await applyLock();
   };
 
   async function openEdit(id) {
@@ -949,6 +963,7 @@
   }
   $('editForm').date.addEventListener('change', updateMoney);
   $('editForm').currency.addEventListener('change', () => { $('fxCands').innerHTML = ''; updateMoney(); });
+  document.querySelectorAll('#payPicker input').forEach(i => i.addEventListener('change', () => { $('payNote').hidden = i.value !== 'personal' || !i.checked; }));
   $('editForm').audAmount.addEventListener('input', () => { audSource = 'manual'; updateMoney(); });
   $('editForm').audAmount.addEventListener('blur', e => { const n = num(e.target.value); if (n != null) e.target.value = fix2(n); });
 
@@ -1069,7 +1084,7 @@
 
   /* ----- Expense type: preset list, plus free text when nothing fits ----- */
   const CATEGORIES = [
-    'Meals & Entertainment', 'Staff Amenities', 'Parking', 'Fuel', 'Fuel / Mileage',
+    'Meals & Entertainment', 'Employee Meals – Travelling', 'Employee Meals – Not Travelling', 'Staff Amenities', 'Parking', 'Fuel', 'Fuel / Mileage',
     'Travel – Air', 'Travel – Ground', 'Lodging', 'Office Supplies', 'Software / Subscriptions', 'Other',
   ];
   const CUSTOM = '__custom';
@@ -1218,13 +1233,16 @@
   let people = []; // [{ name, org, type }]
   function peopleMode() {
     const cats = splits.length ? splits.map(x => x.category) : [readCategory()];
-    const meal = cats.some(c => MEAL_CATS.includes(c)), travel = cats.some(c => TRAVEL_CATS.includes(c));
-    return meal && travel ? 'both' : meal ? 'meal' : travel ? 'travel' : '';
+    const ent = cats.some(c => ENT_CATS.includes(c)), emp = cats.some(c => EMP_MEAL_CATS.includes(c)), travel = cats.some(c => TRAVEL_CATS.includes(c));
+    return ent && (travel || emp) ? 'both' : ent ? 'meal' : emp && travel ? 'travel' : emp ? 'staff' : travel ? 'travel' : '';
   }
   function renderPeople() {
     const mode = peopleMode();
     $('peopleBox').hidden = !mode && !people.length;
-    $('peopleLabel').textContent = mode === 'travel' ? 'Employees travelling' : mode === 'both' ? 'Attendees / employees travelling' : 'Attendees';
+    $('peopleLabel').textContent = mode === 'travel' ? 'Employees travelling' : mode === 'staff' ? 'Employees' : mode === 'both' ? 'Attendees / employees travelling' : 'Attendees';
+    // Entertainment: was the employee travelling? (decides how accounts treat it)
+    const ent = (splits.length ? splits.map(x => x.category) : [readCategory()]).some(c => ENT_CATS.includes(c));
+    $('travelField').hidden = !ent;
     $('peopleNames').innerHTML = (settings.people || []).map(n => `<option value="${escapeHtml(n)}">`).join('');
     $('peopleRows').innerHTML = people.map((p, i) => `
       <div class="person-row" data-i="${i}">
@@ -1244,6 +1262,7 @@
     $('peopleHint').textContent = !named.length
       ? (mode === 'travel' ? 'Add who travelled.' : mode ? 'Add everyone who attended – accounts need this for FBT.' : '')
       : mode === 'travel' ? `${plural(named.length, 'person')} travelling`
+      : mode === 'staff' ? `${plural(named.length, 'employee')}${total ? ` · ${money(total / named.length)} per head` : ''}`
       : `${plural(named.length, 'person')}${total ? ` · ${money(total / named.length)} per head` : ''}${clients ? ` · ${plural(clients, 'client')} present` : ' · no clients'}`;
   }
   $('peopleAdd').onclick = () => { people.push({ name: '', org: '', type: peopleMode() === 'meal' ? 'Client' : 'Employee' }); renderPeople(); const rows = $('peopleRows').querySelectorAll('[data-k=name]'); rows[rows.length - 1].focus(); };
@@ -1296,6 +1315,8 @@
       audSource: f.currency.value !== 'AUD' ? audSource : '',
       abn: validAbn(f.abn.value) ? fmtAbn(f.abn.value) : f.abn.value.trim(),
       taxInvoiceOk: f.taxInvoiceOk.checked,
+      payment: (document.querySelector('#payPicker input:checked') || {}).value || 'company',
+      travelStatus: (document.querySelector('#travelPicker input:checked') || {}).value || '',
       attendees: people.filter(p => p.name.trim()).map(p => ({ name: p.name.trim(), org: (p.org || '').trim(), type: p.type || 'Employee' })),
       recurring: f.recurring.checked && !editing.recurringFrom,
       splits: splits.length > 1 ? splits.map(x => ({ id: x.id, category: x.category, unit: x.unit, amount: num(x.amount) != null ? fix2(num(x.amount)) : '', gst: num(x.gst) != null ? fix2(num(x.gst)) : '0.00', note: (x.note || '').trim() })) : [],
@@ -1334,11 +1355,11 @@
     const dups = (await db.all()).filter(o => looksDuplicate(editing, o));
     if (dups.length) {
       const d = dups[0];
-      if (!confirm(`This looks like a duplicate of:\n\n${d.vendor} – ${money(audTotal(d))} on ${fmtDay(d.date)}${monthOf(d) !== monthOf(editing) ? ` (${monthLabel(monthOf(d))} claim)` : ''}\n\nSave it anyway? (Choose Cancel to go back and check.)`)) return;
+      if (!confirm(`This looks like a duplicate of:\n\n${d.vendor} – ${money(audTotal(d))} on ${fmtDay(d.date)}${claimKeyOf(d) !== claimKeyOf(editing) ? ` (${monthLabel(claimKeyOf(d))} claim)` : ''}\n\nSave it anyway? (Choose Cancel to go back and check.)`)) return;
       editing.notDuplicateOf = [...new Set([...(editing.notDuplicateOf || []), ...dups.map(x => x.id)])];
     }
-    // Saving into a month that has already been submitted reopens that claim.
-    const month = monthOf(editing);
+    // Saving into a claim that has already been submitted reopens that claim.
+    const month = claimKeyOf(editing);
     if (await isLocked(month)) {
       if (!confirm(`The ${monthLabel(month)} claim has already been submitted.\n\nSave this receipt and reopen that claim? It will need resubmitting, with an exception report.`)) return;
       await reopenClaim(month, { ask: false });
@@ -1365,6 +1386,7 @@
       settings.recurring.push({
         id: editing.id, vendor: editing.vendor, purpose: editing.purpose, amount: editing.amount, gst: editing.gst, gstMode: editing.gstMode,
         currency: editing.currency, category: editing.category, unit: editing.unit, attendees: editing.attendees, splits: editing.splits,
+        payment: editing.payment, travelStatus: editing.travelStatus,
         day: Number((editing.date || todayISO()).slice(8, 10)),
         lastMonth: prevTemplate && prevTemplate.lastMonth > monthOf(editing) ? prevTemplate.lastMonth : monthOf(editing),
       });
@@ -1495,7 +1517,7 @@
           id: uid(), created: Date.now(), date: `${m}-${String(day).padStart(2, '0')}`, vendor: t.vendor, purpose: t.purpose,
           amount: t.amount, gst: t.gst, gstMode: t.gstMode, currency: t.currency || 'AUD', category: t.category, unit: t.unit,
           attendees: (t.attendees || []).map(p => ({ ...p })), splits: (t.splits || []).map(x => ({ ...x, id: uid() })),
-          attachments: [], image: null, thumb: null, imageVer: 0, recurringFrom: t.id,
+          attachments: [], image: null, thumb: null, imageVer: 0, recurringFrom: t.id, payment: t.payment || 'company', travelStatus: t.travelStatus || '',
         });
         t.lastMonth = m; made++;
         m = nextMonth(m);
@@ -1549,7 +1571,7 @@
   $('clearSentBtn').onclick = async () => {
     const claims = (await db.claims.all()).filter(c => c.status === 'submitted');
     const months = new Set(claims.map(c => c.month));
-    const recs = (await db.all()).filter(r => months.has(monthOf(r)));
+    const recs = (await db.all()).filter(r => months.has(claimKeyOf(r)));
     if (!recs.length) return toast('No submitted claims to delete.');
     if (!confirm(`Delete ${plural(recs.length, 'receipt')} from ${plural(months.size, 'submitted claim')} on this phone?\n\nMake sure accounts has them – this can’t be undone.`)) return;
     for (const r of recs) await db.del(r.id);
@@ -1560,7 +1582,7 @@
   let prepared = null; // { files, subject, body, month, items, total, exceptions, copy }
 
   async function openSubmit(month, { copy }) {
-    const recs = (await db.all()).filter(r => monthOf(r) === month);
+    const recs = (await db.all()).filter(r => claimKeyOf(r) === month);
     const missing = recs.filter(r => !r.unit || r.amount === '' || r.amount == null || !r.vendor || (isForeign(r) && audView(r).amount === ''));
     if (!copy && missing.length) {
       toast(`${plural(missing.length, 'receipt')} still need${missing.length === 1 ? 's' : ''} a vendor, total, business unit or AUD amount.`, 4500);
@@ -1570,8 +1592,10 @@
     if (!copy && estimated.length && !confirm(`${plural(estimated.length, 'overseas receipt')} still ${estimated.length === 1 ? 'uses' : 'use'} an estimated AUD amount (from the day's exchange rate):\n\n${estimated.map(r => `• ${r.vendor} ${fxLabel(r)} ≈ ${money(audTotal(r))}`).join('\n')}\n\nSubmit with the estimates? They're marked as estimates for accounts. When the bank statement arrives, updating them reopens the claim and shows on the exception report.`)) return;
     const noTaxInv = recs.filter(r => taxInvoiceIssue(r));
     const noPeople = recs.filter(r => needsPeople(r) && !(r.attendees || []).some(p => p.name));
-    if (!copy && (noTaxInv.length || noPeople.length)) {
+    const noTravel = recs.filter(r => isEntertainment(r) && !r.travelStatus);
+    if (!copy && (noTaxInv.length || noPeople.length || noTravel.length)) {
       const lines = [
+        ...noTravel.map(r => `• ${r.vendor} ${money(audTotal(r))} – entertainment: employee travelling or not?`),
         ...noTaxInv.map(r => `• ${r.vendor} ${money(r.amount)} – no tax invoice / ABN (GST may not be claimable)`),
         ...noPeople.map(r => `• ${r.vendor} ${money(audTotal(r))} – no attendees / employees listed`),
       ];
@@ -1641,11 +1665,11 @@
         attachments: await Promise.all((r.attachments || []).map(async a => ({ ...a, jpeg: new Uint8Array(await a.blob.arrayBuffer()) }))),
       })));
       const pdf = ExpensePdf.buildClaimReport({
-        name: settings.name, monthLabel: label, submissionNo, previous, receipts: withBytes, exceptions,
+        name: settings.name, monthLabel: label, submissionNo, previous, receipts: withBytes, exceptions, personal: isPersonalKey(month),
         primary: settings.primary, accent: settings.accent,
       });
       const xlsx = buildClaimSheet({ month, label, ordered, exceptions, submissionNo, previous, total, totalGst });
-      const base = `Expense_Claim_${safeFile(who)}_${month}${submissionNo > 1 ? `_resub${submissionNo - 1}` : ''}`;
+      const base = `${isPersonalKey(month) ? 'Reimbursement_Claim' : 'Expense_Claim'}_${safeFile(who)}_${monthOfKey(month)}${submissionNo > 1 ? `_resub${submissionNo - 1}` : ''}`;
       const pdfFile = new File([pdf], `${base}.pdf`, { type: 'application/pdf' });
       const xlsxFile = new File([xlsx], `${base}.xlsx`, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const csvFile = new File([buildClaimCsv(ordered, label)], `${base}.csv`, { type: 'text/csv' });
@@ -1660,13 +1684,15 @@
       const shareOptions = (android ? [[pdfFile, csvFile], [pdfFile]] : [files, [pdfFile, csvFile], [pdfFile]]).filter(canShare);
       const shareFiles = shareOptions[0] || null;
 
-      const subject = `Expense claim – ${who} – ${label}${resubTag}`;
+      const subject = `${isPersonalKey(month) ? 'Reimbursement claim' : 'Expense claim'} – ${who} – ${label}${resubTag}`;
       const lines = unitLines.map(([u, l]) => `${u}: ${plural(l.length, 'receipt')}, ${money(l.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0))}`);
       const exText = submissionNo > 1
         ? `\n\nThis replaces the claim sent ${previous ? previous.date : 'earlier'}${previous ? ` (${money(previous.total)})` : ''}. Changes:\n` +
           (exceptions.length ? exceptions.map(x => `- ${x.type} ${x.ref || ''} ${x.vendor || ''}: ${x.detail}`).join('\n') : '- No line changes')
         : '';
-      const body = `Hi,\n\nPlease find attached my expense claim for ${label}${resubTag}.\n\n${lines.join('\n')}\n` +
+      const body = (isPersonalKey(month)
+        ? `Hi,\n\nPlease find attached my reimbursement claim for ${monthLabel(monthOfKey(month))}${resubTag} – business expenses I paid with my personal card or cash. Please reimburse the total to me.\n\n`
+        : `Hi,\n\nPlease find attached my expense claim for ${label}${resubTag}.\n\n`) + `${lines.join('\n')}\n` +
         `Total: ${money(total) || '$0.00'} (GST ${money(totalGst) || '$0.00'}; ex GST ${money(total - totalGst) || '$0.00'})${exText}\n\n` +
         `Attached: PDF claim with receipts and supporting documents, and an Excel spreadsheet.\n\nThanks,\n${settings.name || ''}`.trim();
 
@@ -1694,8 +1720,10 @@
       isForeign(r) ? 'n/a – overseas' : (parseFloat(r.receiptTotal) || 0) <= TAX_INVOICE_LIMIT ? 'Not required (≤ $82.50)' : r.taxInvIssue ? 'MISSING' : 'Yes',
       { v: r.attendeesText || '', t: 'wrap' }, (r.attendees || []).filter(p => p.name).length || '',
       MEAL_CATS.includes(r.category) && (r.attendees || []).length ? { v: (parseFloat(r.amount) || 0) / r.attendees.length, t: 'money' } : '',
+      ENT_CATS.includes(r.category) ? (r.travelStatus === 'travelling' ? 'Travelling' : r.travelStatus === 'not' ? 'Not travelling' : 'Not stated') : '',
+      r.payment === 'personal' ? 'Personal card / cash' : 'Company card',
     ]);
-    lines.push(null, ['', '', '', '', { v: 'TOTAL', t: 'bold' }, '', '', '', { v: total - totalGst, t: 'boldMoney' }, { v: totalGst, t: 'boldMoney' }, { v: total, t: 'boldMoney' }, '', '', '', '', '', '', '', '', '', '', '']);
+    lines.push(null, ['', '', '', '', { v: 'TOTAL', t: 'bold' }, '', '', '', { v: total - totalGst, t: 'boldMoney' }, { v: totalGst, t: 'boldMoney' }, { v: total, t: 'boldMoney' }, '', '', '', '', '', '', '', '', '', '', '', '', '']);
     const sheets = [{
       name: 'Claim lines',
       columns: [
@@ -1705,6 +1733,7 @@
         { header: 'Supporting docs', width: 15, type: 'number' }, { header: 'Receipt', width: 11 },
         { header: 'Currency', width: 10 }, { header: 'Foreign total', width: 13, type: 'money' }, { header: 'Rate to AUD', width: 12, type: 'number' }, { header: 'AUD from', width: 15 },
         { header: 'Split', width: 24 }, { header: 'Tax invoice', width: 20 }, { header: 'Attendees / travellers', width: 50 }, { header: 'People', width: 8, type: 'number' }, { header: 'Cost per head', width: 13, type: 'money' },
+        { header: 'Employee travelling', width: 18 }, { header: 'Paid with', width: 20 },
       ],
       rows: lines,
     }];
@@ -1764,13 +1793,14 @@
 
   function buildClaimCsv(ordered, label) {
     const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const head = ['Ref', 'Claim month', 'Business unit', 'Date', 'Vendor', 'ABN', 'Expense type', 'Purpose', 'Ex GST (AUD)', 'GST (AUD)', 'Total (AUD)', 'Supporting docs', 'Receipt', 'Currency', 'Foreign total', 'Rate to AUD', 'AUD from', 'Split', 'Tax invoice', 'Attendees / travellers'];
+    const head = ['Ref', 'Claim month', 'Business unit', 'Date', 'Vendor', 'ABN', 'Expense type', 'Purpose', 'Ex GST (AUD)', 'GST (AUD)', 'Total (AUD)', 'Supporting docs', 'Receipt', 'Currency', 'Foreign total', 'Rate to AUD', 'AUD from', 'Split', 'Tax invoice', 'Attendees / travellers', 'Employee travelling', 'Paid with'];
     const rows = ordered.map(r => [r.ref, label, r.unit || '', r.date ? r.date.split('-').reverse().join('/') : '', r.vendor || '', r.abn || '', r.category || '', r.purpose || '',
       ((parseFloat(r.amount) || 0) - (parseFloat(r.gst) || 0)).toFixed(2), (parseFloat(r.gst) || 0).toFixed(2), (parseFloat(r.amount) || 0).toFixed(2),
       (r.attachments || []).length, r.image ? 'Yes' : 'To follow',
       isForeign(r) ? r.currency : 'AUD', isForeign(r) ? (parseFloat(r.fxAmount) || 0).toFixed(2) : '', isForeign(r) && r.rate ? r.rate.toFixed(4) : '',
       isForeign(r) ? (r.audBasis === 'estimate' ? 'Estimate (daily rate)' : r.audSource === 'bank' ? 'Bank statement' : 'Entered') : '',
-      r.splitOfRef ? `Split of ${r.splitOfRef}` : '', isForeign(r) ? 'n/a' : (parseFloat(r.receiptTotal) || 0) <= TAX_INVOICE_LIMIT ? 'Not required' : r.taxInvIssue ? 'MISSING' : 'Yes', r.attendeesText || '']);
+      r.splitOfRef ? `Split of ${r.splitOfRef}` : '', isForeign(r) ? 'n/a' : (parseFloat(r.receiptTotal) || 0) <= TAX_INVOICE_LIMIT ? 'Not required' : r.taxInvIssue ? 'MISSING' : 'Yes', r.attendeesText || '',
+      ENT_CATS.includes(r.category) ? (r.travelStatus === 'travelling' ? 'Travelling' : r.travelStatus === 'not' ? 'Not travelling' : 'Not stated') : '', r.payment === 'personal' ? 'Personal card / cash' : 'Company card']);
     return '\uFEFF' + [head, ...rows].map(r => r.map(q).join(',')).join('\r\n');
   }
 
@@ -1945,7 +1975,7 @@
   async function useBankAud(id, amount) {
     const rec = await db.get(id);
     if (!rec) return;
-    const month = monthOf(rec);
+    const month = claimKeyOf(rec);
     if (await isLocked(month)) {
       if (!confirm(`The ${monthLabel(month)} claim is submitted. Reopen it to add the AUD amount?`)) return;
       await reopenClaim(month, { ask: false });
@@ -1971,7 +2001,7 @@
     const unclaimed = r.unclaimed.filter(t => !ignored.has(t.key));
     const personal = r.unclaimed.filter(t => ignored.has(t.key));
     const tx = t => `<div class="rc-line"><span>${escapeHtml(fmtDay(t.date))}</span><span class="rc-desc">${escapeHtml(t.desc)}</span><strong>${money(t.amount)}</strong></div>`;
-    const cl = c => `<div class="rc-line"><span>${escapeHtml(fmtDay(c.date))}</span><span class="rc-desc">${escapeHtml(c.vendor || '')}${c.unit ? ` · ${escapeHtml(c.unit)}` : ''}${isForeign(c) ? ` · ${escapeHtml(fxLabel(c))}` : ''}</span><strong>${c.amount !== '' ? money(c.amount) : c.audEstimate ? `<span class="est">~${money(c.audEstimate)}</span>` : 'AUD ?'}</strong></div>`;
+    const cl = c => `<div class="rc-line"><span>${escapeHtml(fmtDay(c.date))}</span><span class="rc-desc">${escapeHtml(c.vendor || '')}${c.unit ? ` · ${escapeHtml(c.unit)}` : ''}${isForeign(c) ? ` · ${escapeHtml(fxLabel(c))}` : ''}${c.payment === 'personal' ? ' · personal card' : ''}</span><strong>${c.amount !== '' ? money(c.amount) : c.audEstimate ? `<span class="est">~${money(c.audEstimate)}</span>` : 'AUD ?'}</strong></div>`;
     out.innerHTML = `
       <div class="rc-file">${escapeHtml(reconData.name)} · ${escapeHtml(fmtDay(reconData.from))} – ${escapeHtml(fmtDay(reconData.to))} · ${plural(reconData.transactions.length, 'purchase')}${reconData.note ? `<br><span class="muted small">${escapeHtml(reconData.note)}</span>` : ''}</div>
       <div class="rc-tiles">

@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=14">
+  <link rel="stylesheet" href="styles.css?v=15">
 </head>
 <body>
   <header class="topbar">
@@ -39,7 +39,7 @@
       <input type="search" id="searchInput" placeholder="Search vendor, purpose, amount, people…" aria-label="Search receipts">
       <div class="filter-row">
         <select id="filterUnit" aria-label="Business unit"><option value="">All units</option><option>Mentis</option><option>Macrack</option></select>
-        <select id="filterCat" aria-label="Expense type"><option value="">All expense types</option><option>Meals &amp; Entertainment</option><option>Staff Amenities</option><option>Parking</option><option>Fuel</option><option>Fuel / Mileage</option><option>Travel – Air</option><option>Travel – Ground</option><option>Lodging</option><option>Office Supplies</option><option>Software / Subscriptions</option><option>Other</option></select>
+        <select id="filterCat" aria-label="Expense type"><option value="">All expense types</option><option>Meals &amp; Entertainment</option><option>Employee Meals – Travelling</option><option>Employee Meals – Not Travelling</option><option>Staff Amenities</option><option>Parking</option><option>Fuel</option><option>Fuel / Mileage</option><option>Travel – Air</option><option>Travel – Ground</option><option>Lodging</option><option>Office Supplies</option><option>Software / Subscriptions</option><option>Other</option></select>
       </div>
     </div>
     <div class="search-note" id="searchNote" hidden></div>
@@ -185,6 +185,14 @@
         </div>
       </div>
 
+      <fieldset class="field">
+        <span>Paid with</span>
+        <div class="segmented" id="payPicker">
+          <label><input type="radio" name="payment" value="company"><span>Company card</span></label>
+          <label><input type="radio" name="payment" value="personal"><span>Personal card / cash</span></label>
+        </div>
+        <p class="muted small" id="payNote" hidden>Paid personally – this goes on a separate <strong>reimbursement claim</strong> for the month.</p>
+      </fieldset>
       <fieldset class="field" id="unitField">
         <span>Business unit</span>
         <div class="segmented" id="unitPicker">
@@ -200,7 +208,7 @@
         <span>Expense type</span>
         <select name="category" id="categorySelect">
           <option value="">Choose expense type…</option>
-          <option>Meals &amp; Entertainment</option>
+          <option>Meals &amp; Entertainment</option><option>Employee Meals – Travelling</option><option>Employee Meals – Not Travelling</option>
           <option>Staff Amenities</option>
           <option>Parking</option>
           <option>Fuel</option>
@@ -218,6 +226,13 @@
         <span>Expense type (type it in)</span>
         <input name="customCategory" id="customCategory" placeholder="e.g. Conference fees, Tolls, Gifts" maxlength="40">
       </label>
+      <fieldset class="field" id="travelField" hidden>
+        <span>Employee travelling?</span>
+        <div class="segmented" id="travelPicker">
+          <label><input type="radio" name="travelStatus" value="not"><span>Not travelling</span></label>
+          <label><input type="radio" name="travelStatus" value="travelling"><span>Travelling</span></label>
+        </div>
+      </fieldset>
       <div class="field people" id="peopleBox" hidden>
         <span id="peopleLabel">Attendees</span>
         <div id="peopleRows"></div>
@@ -417,12 +432,12 @@
   <div class="toast" id="toast" hidden></div>
   <div class="busy" id="busy" hidden><div class="spinner"></div></div>
 
-  <script src="ocr.js?v=14"></script>
-  <script src="pdf.js?v=14"></script>
-  <script src="xlsx.js?v=14"></script>
-  <script src="recon.js?v=14"></script>
-  <script src="crop.js?v=14"></script>
-  <script src="docimport.js?v=14"></script>
-  <script src="app.js?v=14"></script>
+  <script src="ocr.js?v=15"></script>
+  <script src="pdf.js?v=15"></script>
+  <script src="xlsx.js?v=15"></script>
+  <script src="recon.js?v=15"></script>
+  <script src="crop.js?v=15"></script>
+  <script src="docimport.js?v=15"></script>
+  <script src="app.js?v=15"></script>
 </body>
 </html>

@@ -36,6 +36,10 @@ The submit screen has a **Send with** choice (remembered for next time):
 - **Split a bill** – **Split this bill** turns one receipt (e.g. a hotel bill) into lines, each with its own expense type, business unit, amount and GST (GST follows 1/11 of each line unless you change it). The first line balances automatically; the lines must add up to the bill. Reports show R1a, R1b… with the receipt image once.
 - **Duplicate check** – saving a receipt with the same amount, a date within a day, and the same vendor as another asks before saving; possible duplicates are tagged in the list.
 
+- **Paid with** – each receipt is *Company card* or *Personal card / cash*. Personally paid receipts form a **separate reimbursement claim** for the month (“September 2026 – Personal reimbursement”), submitted, locked and reopened independently of the company-card claim. Its PDF is titled *Reimbursement Claim* (“please reimburse the total to the claimant”) and its files are named *Reimbursement_Claim_…*.
+- **Entertainment – employee travelling?** *Meals & Entertainment* asks whether the employee was travelling or not; it's shown in the PDF and spreadsheet and flagged if missing.
+- **Employee meals** – separate expense types *Employee Meals – Travelling* and *Employee Meals – Not Travelling*, which ask for the employees.
+
 ## Finding things and staying on top
 
 - **Search and filters** – search by vendor, purpose, amount, people, ABN or date, and filter by business unit or expense type, across all months.

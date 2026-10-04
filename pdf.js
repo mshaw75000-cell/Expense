@@ -83,7 +83,7 @@
    *              attachments: [{ jpeg, w, h }] }]  – already in report order
    * exceptions: [{ ref, type, vendor, detail }] – only on a resubmission
    */
-  function buildClaimReport({ name, monthLabel, submissionNo = 1, previous = null, receipts, exceptions = [],
+  function buildClaimReport({ name, monthLabel, submissionNo = 1, previous = null, receipts, exceptions = [], personal = false,
     primary = '#0b2a4a', accent = '#00a6a6', brand = 'mentis' }) {
     const pages = [];
     const muted = '#677585', ink = '#13202e', warn = '#b26a00';
@@ -110,10 +110,16 @@
     // ---- Summary ----
     const cols = { ref: M + 4, date: M + 34, desc: M + 82, ex: PAGE_W - M - 150, gst: PAGE_W - M - 82, amt: PAGE_W - M };
     let p = new Page(); pages.push(p);
-    header(p, 'Expense Claim');
+    const docTitle = personal ? 'Reimbursement Claim' : 'Expense Claim';
+    header(p, docTitle);
     let y = 100;
     p.text(`${name || 'Expense claim'} – ${monthLabel}`, M, y, { size: 18, bold: true, color: ink }); y += 18;
-    p.text(`${receipts.length} receipt${receipts.length === 1 ? '' : 's'}  ·  ${units.join(', ')}`, M, y, { size: 11, color: muted }); y += 16;
+    p.text(`${receipts.length} line${receipts.length === 1 ? '' : 's'}  ·  ${units.join(', ')}`, M, y, { size: 11, color: muted }); y += 16;
+    if (personal) {
+      p.rect(M, y - 4, PAGE_W - 2 * M, 22, '#e8eef7');
+      p.text('PAID PERSONALLY – please reimburse the total to the claimant.', M + 10, y + 10, { size: 10, bold: true, color: primary });
+      y += 28;
+    }
     if (resub) {
       p.rect(M, y - 4, PAGE_W - 2 * M, 34, '#fff4e0');
       p.text(`RESUBMISSION ${submissionNo - 1} – replaces the claim sent ${previous ? previous.date : 'earlier'}`, M + 10, y + 10, { size: 10, bold: true, color: warn });
@@ -132,7 +138,7 @@
       p.text('TOTAL', cols.amt - 6, y + 1, { size: 8, bold: true, color: muted, align: 'right' });
       y += 24;
     };
-    const newPage = () => { p = new Page(); pages.push(p); header(p, 'Expense Claim (cont.)'); y = 100; };
+    const newPage = () => { p = new Page(); pages.push(p); header(p, docTitle + ' (cont.)'); y = 100; };
     tableHead();
     for (const unit of units) {
       const list = receipts.filter(r => (r.unit || 'Unassigned') === unit);
@@ -142,7 +148,7 @@
       for (const r of list) {
         const descW = cols.ex - cols.desc - 60;
         const fx = r.currency && r.currency !== 'AUD' ? `${r.currency} ${(parseFloat(r.fxAmount) || 0).toFixed(2)}${r.rate ? ` @ ${r.rate.toFixed(4)}` : ''}${r.audEstimated ? ' (AUD ESTIMATED)' : ''}` : '';
-        const flags = [r.splitOfRef ? `Split of ${r.splitOfRef}` : '', r.taxInvIssue ? 'NO TAX INVOICE' : '', r.attendeesText ? `${(r.attendees || []).filter(p => p.name).length} attendee(s)` : ''].filter(Boolean).join(' · ');
+        const flags = [r.splitOfRef ? `Split of ${r.splitOfRef}` : '', r.travelText || '', r.taxInvIssue ? 'NO TAX INVOICE' : '', r.attendeesText ? `${(r.attendees || []).filter(p => p.name).length} attendee(s)` : ''].filter(Boolean).join(' · ');
         const sub = [fx, r.category, r.purpose, flags].filter(Boolean).join(' · ');
         const subLines = sub ? wrap(sub, 9, descW).slice(0, 3) : [];
         const rowH = 16 + subLines.length * 11 + 8;
@@ -178,7 +184,7 @@
     p.text('GST', bx + 12, y, { size: 10, color: muted });
     p.text(money(totalGst) || '$0.00', PAGE_W - M - 12, y, { size: 10, color: ink, align: 'right' }); y += 12;
     p.rect(bx, y, 240, 30, primary);
-    p.text('TOTAL CLAIM (INC GST)', bx + 12, y + 19, { size: 10, bold: true, color: '#ffffff' });
+    p.text(personal ? 'TO REIMBURSE (INC GST)' : 'TOTAL CLAIM (INC GST)', bx + 12, y + 19, { size: 10, bold: true, color: '#ffffff' });
     p.text(money(total) || '$0.00', PAGE_W - M - 12, y + 19, { size: 13, bold: true, color: '#ffffff', align: 'right' });
     y += 60;
     if (y + 40 < PAGE_H - 50) {
@@ -267,6 +273,7 @@
           r.splitSummary.forEach((x, k) => pg.text(`${x.ref}  ${x.category || ''}  ·  ${x.unit || ''}  ·  ${money(x.amount)}`, M + 52, yy + k * 13, { size: 10, color: ink }));
           yy += r.splitSummary.length * 13 + 4;
         }
+        if (r.travelText) { pg.text(r.travelText, M, yy, { size: 10, bold: true, color: primary }); yy += 15; }
         if (r.attendeesText) {
           pg.text('People:', M, yy, { size: 10, bold: true, color: primary });
           const lines = wrap(r.attendeesText, 10, PAGE_W - 2 * M - 52).slice(0, 4);
