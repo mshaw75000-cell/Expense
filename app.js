@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '15';
+  const APP_VERSION = '16';
   const UNITS = ['Mentis', 'Macrack'];
 
   /* ---------------- Storage ---------------- */
@@ -216,11 +216,23 @@
   const MEAL_CATS = [...ENT_CATS, ...EMP_MEAL_CATS];
   const TRAVEL_CATS = ['Travel – Air', 'Travel – Ground', 'Lodging'];
   const PERSON_TYPES = ['Employee', 'Client', 'Supplier', 'Other'];
-  const peopleText = list => (list || []).filter(p => p.name).map(p => `${p.name}${p.org || p.type ? ` (${[p.org, p.type && p.type.toLowerCase()].filter(Boolean).join(', ')})` : ''}`).join('; ');
+  const travelWord = t => t === 'travelling' ? 'travelling' : t === 'not' ? 'not travelling' : '';
+  const peopleText = list => (list || []).filter(p => p.name).map(p => `${p.name}${p.org || p.type ? ` (${[p.org, p.type && p.type.toLowerCase(), p.type === 'Employee' ? travelWord(p.travel) : ''].filter(Boolean).join(', ')})` : ''}`).join('; ');
   const catsOf = r => (r.splits && r.splits.length ? r.splits.map(s => s.category) : [r.category]);
   const needsPeople = r => catsOf(r).some(c => MEAL_CATS.includes(c) || TRAVEL_CATS.includes(c));
   const isEntertainment = r => catsOf(r).some(c => ENT_CATS.includes(c));
-  const travelText = r => !isEntertainment(r) ? '' : r.travelStatus === 'travelling' ? 'Employee travelling' : r.travelStatus === 'not' ? 'Employee not travelling' : '';
+  // Entertainment: travelling or not is set per employee on the attendee lines; with no employees listed,
+  // the receipt-level question is used. Returns 'travelling' | 'not' | 'mixed' | '' (not stated).
+  function entTravel(r) {
+    if (!isEntertainment(r)) return '';
+    const emps = (r.attendees || []).filter(p => p.name && p.type === 'Employee');
+    if (!emps.length) return r.travelStatus || '';
+    if (emps.some(p => !p.travel)) return '';
+    return emps.every(p => p.travel === 'travelling') ? 'travelling' : emps.every(p => p.travel === 'not') ? 'not' : 'mixed';
+  }
+  const travelText = r => ({ travelling: 'Employee travelling', not: 'Employee not travelling', mixed: 'Employees: some travelling' })[entTravel(r)] || '';
+  const travelMissing = r => isEntertainment(r) && !entTravel(r);
+  const travelCell = r => !isEntertainment(r) ? '' : ({ travelling: 'Travelling', not: 'Not travelling', mixed: 'Some travelling' })[entTravel(r)] || 'Not stated';
 
   /* ----- Split bills -----
      A receipt can be split into lines (e.g. hotel: room / meals / parking), each with its own expense type,
@@ -299,7 +311,7 @@
     if (search.flag === 'tofollow' && r.image) return false;
     if (search.flag === 'taxinv' && !taxInvoiceIssue(r)) return false;
     if (search.flag === 'dup' && !flags.dup.has(r.id)) return false;
-    if (search.flag === 'people' && !((needsPeople(r) && !(r.attendees || []).some(p => p.name)) || (isEntertainment(r) && !r.travelStatus))) return false;
+    if (search.flag === 'people' && !((needsPeople(r) && !(r.attendees || []).some(p => p.name)) || travelMissing(r))) return false;
     const ls = linesOf(r);
     if (search.unit && !ls.some(l => l.unit === search.unit)) return false;
     if (search.cat && !ls.some(l => l.category === search.cat)) return false;
@@ -401,7 +413,7 @@
           taxInvoiceIssue(r) ? '<span class="tag warn-tag">No tax invoice</span>' : '',
           needsPeople(r) && !people ? '<span class="tag warn-tag">No attendees</span>' : '',
           r.recurringFrom || r.recurring ? '<span class="tag">Monthly</span>' : '',
-          isEntertainment(r) && !r.travelStatus ? '<span class="tag warn-tag">Travelling?</span>' : '',
+          travelMissing(r) ? '<span class="tag warn-tag">Travelling?</span>' : '',
         ].join('');
         li.innerHTML = `
           ${url ? `<img class="thumb" src="${url}" alt="">` : `<div class="thumb thumb-missing"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z"/><path d="M8 7h8M8 11h8M8 15h5"/></svg><span>To follow</span></div>`}
@@ -436,7 +448,7 @@
     if (toFollow) items.push(`<button class="rem" data-rem="tofollow">📎 ${plural(toFollow, 'receipt')} still to follow</button>`);
     const taxinv = open.filter(r => taxInvoiceIssue(r)).length;
     if (taxinv) items.push(`<button class="rem" data-rem="taxinv">⚠ ${taxinv} over $82.50 without a tax invoice</button>`);
-    const people = open.filter(r => (needsPeople(r) && !(r.attendees || []).some(p => p.name)) || (isEntertainment(r) && !r.travelStatus)).length;
+    const people = open.filter(r => (needsPeople(r) && !(r.attendees || []).some(p => p.name)) || travelMissing(r)).length;
     if (people) items.push(`<button class="rem" data-rem="people">👥 ${people} meal / travel claim${people === 1 ? '' : 's'} missing attendees or travel status</button>`);
     const dups = open.filter(r => flags.dup.has(r.id)).length;
     if (dups) items.push(`<button class="rem" data-rem="dup">⚠ ${dups} possible duplicate${dups === 1 ? '' : 's'}</button>`);
@@ -1242,7 +1254,8 @@
     $('peopleLabel').textContent = mode === 'travel' ? 'Employees travelling' : mode === 'staff' ? 'Employees' : mode === 'both' ? 'Attendees / employees travelling' : 'Attendees';
     // Entertainment: was the employee travelling? (decides how accounts treat it)
     const ent = (splits.length ? splits.map(x => x.category) : [readCategory()]).some(c => ENT_CATS.includes(c));
-    $('travelField').hidden = !ent;
+    // With employees on the attendee lines, each one says whether they were travelling instead.
+    $('travelField').hidden = !ent || people.some(p => p.type === 'Employee');
     $('peopleNames').innerHTML = (settings.people || []).map(n => `<option value="${escapeHtml(n)}">`).join('');
     $('peopleRows').innerHTML = people.map((p, i) => `
       <div class="person-row" data-i="${i}">
@@ -1250,6 +1263,10 @@
         <input data-k="org" value="${escapeHtml(p.org || '')}" placeholder="Company">
         <select data-k="type">${PERSON_TYPES.map(t => `<option${t === p.type ? ' selected' : ''}>${t}</option>`).join('')}</select>
         <button type="button" class="split-del" data-pdel="${i}" aria-label="Remove person"${editLocked ? ' hidden' : ''}>×</button>
+        ${ent && p.type === 'Employee' ? `<div class="person-travel" role="radiogroup" aria-label="${escapeHtml(p.name || 'Employee')} travelling?">
+          <button type="button" data-travel="not" class="${p.travel === 'not' ? 'on' : ''}">Not travelling</button>
+          <button type="button" data-travel="travelling" class="${p.travel === 'travelling' ? 'on' : ''}">Travelling</button>
+        </div>` : ''}
       </div>`).join('');
     if (editLocked) $('peopleRows').querySelectorAll('input, select').forEach(el => { el.disabled = true; });
     updatePeopleHint();
@@ -1280,9 +1297,16 @@
   $('peopleRows').addEventListener('change', e => {
     const row = e.target.closest('.person-row'); if (!row) return;
     people[Number(row.dataset.i)][e.target.dataset.k] = e.target.value;
-    updatePeopleHint();
+    if (e.target.dataset.k === 'type') renderPeople(); else updatePeopleHint();
   });
   $('peopleRows').addEventListener('click', e => {
+    const t = e.target.closest('[data-travel]');
+    if (t && !editLocked) {
+      const p = people[Number(t.closest('.person-row').dataset.i)];
+      p.travel = p.travel === t.dataset.travel ? '' : t.dataset.travel;
+      renderPeople();
+      return;
+    }
     const d = e.target.closest('[data-pdel]'); if (!d) return;
     people.splice(Number(d.dataset.pdel), 1);
     renderPeople();
@@ -1317,7 +1341,7 @@
       taxInvoiceOk: f.taxInvoiceOk.checked,
       payment: (document.querySelector('#payPicker input:checked') || {}).value || 'company',
       travelStatus: (document.querySelector('#travelPicker input:checked') || {}).value || '',
-      attendees: people.filter(p => p.name.trim()).map(p => ({ name: p.name.trim(), org: (p.org || '').trim(), type: p.type || 'Employee' })),
+      attendees: people.filter(p => p.name.trim()).map(p => ({ name: p.name.trim(), org: (p.org || '').trim(), type: p.type || 'Employee', ...(p.type === 'Employee' && p.travel ? { travel: p.travel } : {}) })),
       recurring: f.recurring.checked && !editing.recurringFrom,
       splits: splits.length > 1 ? splits.map(x => ({ id: x.id, category: x.category, unit: x.unit, amount: num(x.amount) != null ? fix2(num(x.amount)) : '', gst: num(x.gst) != null ? fix2(num(x.gst)) : '0.00', note: (x.note || '').trim() })) : [],
     });
@@ -1592,7 +1616,7 @@
     if (!copy && estimated.length && !confirm(`${plural(estimated.length, 'overseas receipt')} still ${estimated.length === 1 ? 'uses' : 'use'} an estimated AUD amount (from the day's exchange rate):\n\n${estimated.map(r => `• ${r.vendor} ${fxLabel(r)} ≈ ${money(audTotal(r))}`).join('\n')}\n\nSubmit with the estimates? They're marked as estimates for accounts. When the bank statement arrives, updating them reopens the claim and shows on the exception report.`)) return;
     const noTaxInv = recs.filter(r => taxInvoiceIssue(r));
     const noPeople = recs.filter(r => needsPeople(r) && !(r.attendees || []).some(p => p.name));
-    const noTravel = recs.filter(r => isEntertainment(r) && !r.travelStatus);
+    const noTravel = recs.filter(travelMissing);
     if (!copy && (noTaxInv.length || noPeople.length || noTravel.length)) {
       const lines = [
         ...noTravel.map(r => `• ${r.vendor} ${money(audTotal(r))} – entertainment: employee travelling or not?`),
@@ -1720,7 +1744,7 @@
       isForeign(r) ? 'n/a – overseas' : (parseFloat(r.receiptTotal) || 0) <= TAX_INVOICE_LIMIT ? 'Not required (≤ $82.50)' : r.taxInvIssue ? 'MISSING' : 'Yes',
       { v: r.attendeesText || '', t: 'wrap' }, (r.attendees || []).filter(p => p.name).length || '',
       MEAL_CATS.includes(r.category) && (r.attendees || []).length ? { v: (parseFloat(r.amount) || 0) / r.attendees.length, t: 'money' } : '',
-      ENT_CATS.includes(r.category) ? (r.travelStatus === 'travelling' ? 'Travelling' : r.travelStatus === 'not' ? 'Not travelling' : 'Not stated') : '',
+      ENT_CATS.includes(r.category) ? travelCell(r) : '',
       r.payment === 'personal' ? 'Personal card / cash' : 'Company card',
     ]);
     lines.push(null, ['', '', '', '', { v: 'TOTAL', t: 'bold' }, '', '', '', { v: total - totalGst, t: 'boldMoney' }, { v: totalGst, t: 'boldMoney' }, { v: total, t: 'boldMoney' }, '', '', '', '', '', '', '', '', '', '', '', '', '']);
@@ -1800,7 +1824,7 @@
       isForeign(r) ? r.currency : 'AUD', isForeign(r) ? (parseFloat(r.fxAmount) || 0).toFixed(2) : '', isForeign(r) && r.rate ? r.rate.toFixed(4) : '',
       isForeign(r) ? (r.audBasis === 'estimate' ? 'Estimate (daily rate)' : r.audSource === 'bank' ? 'Bank statement' : 'Entered') : '',
       r.splitOfRef ? `Split of ${r.splitOfRef}` : '', isForeign(r) ? 'n/a' : (parseFloat(r.receiptTotal) || 0) <= TAX_INVOICE_LIMIT ? 'Not required' : r.taxInvIssue ? 'MISSING' : 'Yes', r.attendeesText || '',
-      ENT_CATS.includes(r.category) ? (r.travelStatus === 'travelling' ? 'Travelling' : r.travelStatus === 'not' ? 'Not travelling' : 'Not stated') : '', r.payment === 'personal' ? 'Personal card / cash' : 'Company card']);
+      ENT_CATS.includes(r.category) ? travelCell(r) : '', r.payment === 'personal' ? 'Personal card / cash' : 'Company card']);
     return '\uFEFF' + [head, ...rows].map(r => r.map(q).join(',')).join('\r\n');
   }
 

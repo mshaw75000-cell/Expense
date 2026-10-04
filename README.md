@@ -37,7 +37,7 @@ The submit screen has a **Send with** choice (remembered for next time):
 - **Duplicate check** – saving a receipt with the same amount, a date within a day, and the same vendor as another asks before saving; possible duplicates are tagged in the list.
 
 - **Paid with** – each receipt is *Company card* or *Personal card / cash*. Personally paid receipts form a **separate reimbursement claim** for the month (“September 2026 – Personal reimbursement”), submitted, locked and reopened independently of the company-card claim. Its PDF is titled *Reimbursement Claim* (“please reimburse the total to the claimant”) and its files are named *Reimbursement_Claim_…*.
-- **Entertainment – employee travelling?** *Meals & Entertainment* asks whether the employee was travelling or not; it's shown in the PDF and spreadsheet and flagged if missing.
+- **Entertainment – employee travelling?** On *Meals & Entertainment*, each attendee marked **Employee** gets **Not travelling / Travelling** buttons on their line (shown as “Michael Shaw (Mentis, employee, travelling)”). With no employees listed, the receipt asks once instead. It's shown in the PDF and spreadsheet (Travelling / Not travelling / Some travelling) and flagged if missing.
 - **Employee meals** – separate expense types *Employee Meals – Travelling* and *Employee Meals – Not Travelling*, which ask for the employees.
 
 ## Finding things and staying on top

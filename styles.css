@@ -373,3 +373,8 @@ input.bad { border-color: var(--danger) !important; }
 .pay-chip { display: inline-block; vertical-align: middle; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: #e8eef7; color: var(--primary); margin-left: 4px; }
 #payPicker span { font-size: 14px; padding: 12px 6px; }
 .pay-chip.company { background: #e3f6f6; color: #047878; }
+.person-row { grid-template-areas: "name org type del" "trav trav trav trav"; }
+.person-row [data-k=name] { grid-area: name; } .person-row [data-k=org] { grid-area: org; } .person-row [data-k=type] { grid-area: type; } .person-row .split-del { grid-area: del; }
+.person-travel { grid-area: trav; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 4px; }
+.person-travel button { padding: 7px; border: 1.5px solid var(--line); border-radius: 8px; background: #fff; font: inherit; font-size: 13px; font-weight: 700; color: var(--muted); }
+.person-travel button.on { border-color: var(--accent); background: #e3f6f6; color: var(--primary); }
