@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=11">
+  <link rel="stylesheet" href="styles.css?v=12">
 </head>
 <body>
   <header class="topbar">
@@ -105,16 +105,36 @@
       </label>
 
       <div class="money-card">
+        <label class="field currency-row">
+          <span>Currency</span>
+          <select name="currency" id="currencySelect">
+            <option value="AUD">AUD</option>
+            <option value="USD">USD</option>
+            <option value="NZD">NZD</option>
+            <option value="GBP">GBP</option>
+            <option value="EUR">EUR</option>
+            <option value="SGD">SGD</option>
+            <option value="HKD">HKD</option>
+            <option value="JPY">JPY</option>
+            <option value="CNY">CNY</option>
+            <option value="CAD">CAD</option>
+            <option value="CHF">CHF</option>
+            <option value="THB">THB</option>
+            <option value="IDR">IDR</option>
+            <option value="INR">INR</option>
+            <option value="FJD">FJD</option>
+          </select>
+        </label>
         <label class="field">
-          <span>Total (inc GST)</span>
+          <span id="totalLabel">Total (inc GST)</span>
           <input name="amount" inputmode="decimal" placeholder="0.00">
         </label>
         <label class="field">
-          <span>GST <em class="gst-mode" id="gstMode"></em></span>
+          <span><span id="gstName">GST</span> <em class="gst-mode" id="gstMode"></em></span>
           <input name="gst" inputmode="decimal" placeholder="0.00">
         </label>
         <label class="field">
-          <span>Ex GST</span>
+          <span id="exLabel">Ex GST</span>
           <input name="exgst" readonly tabindex="-1">
         </label>
         <div class="gst-actions">
@@ -122,6 +142,16 @@
           <button type="button" class="btn small ghost" id="gstNoneBtn">No GST</button>
         </div>
         <p class="gst-warn" id="gstWarn" hidden>GST is more than the total – check the amounts.</p>
+      </div>
+
+      <div class="fx-card" id="fxCard" hidden>
+        <label class="field">
+          <span>Amount in AUD <em class="gst-mode" id="fxSource"></em></span>
+          <input name="audAmount" inputmode="decimal" placeholder="0.00">
+        </label>
+        <p class="small muted" id="fxRate"></p>
+        <button type="button" class="btn small ghost" id="fxFindBtn">Find on bank statement</button>
+        <div class="fx-cands" id="fxCands"></div>
       </div>
 
       <fieldset class="field">
@@ -327,12 +357,12 @@
   <div class="toast" id="toast" hidden></div>
   <div class="busy" id="busy" hidden><div class="spinner"></div></div>
 
-  <script src="ocr.js?v=11"></script>
-  <script src="pdf.js?v=11"></script>
-  <script src="xlsx.js?v=11"></script>
-  <script src="recon.js?v=11"></script>
-  <script src="crop.js?v=11"></script>
-  <script src="docimport.js?v=11"></script>
-  <script src="app.js?v=11"></script>
+  <script src="ocr.js?v=12"></script>
+  <script src="pdf.js?v=12"></script>
+  <script src="xlsx.js?v=12"></script>
+  <script src="recon.js?v=12"></script>
+  <script src="crop.js?v=12"></script>
+  <script src="docimport.js?v=12"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>

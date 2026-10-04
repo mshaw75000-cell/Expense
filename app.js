@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '11';
+  const APP_VERSION = '12';
   const UNITS = ['Mentis', 'Macrack'];
 
   /* ---------------- Storage ---------------- */
@@ -93,11 +93,11 @@
   // What accounts sees as a change: these fields, compared with the last submission.
   const TRACKED = [
     ['date', 'Date'], ['vendor', 'Vendor'], ['purpose', 'Purpose'], ['unit', 'Business unit'], ['category', 'Expense type'],
-    ['amount', 'Total'], ['gst', 'GST'], ['hasReceipt', 'Receipt'], ['attachCount', 'Supporting documents'], ['imageVer', 'Receipt image'],
+    ['amount', 'Total (AUD)'], ['gst', 'GST'], ['currency', 'Currency'], ['fxAmount', 'Foreign amount'], ['hasReceipt', 'Receipt'], ['attachCount', 'Supporting documents'], ['imageVer', 'Receipt image'],
   ];
   const snapshotOf = (r, ref) => ({
     id: r.id, ref, date: r.date || '', vendor: r.vendor || '', purpose: r.purpose || '', unit: r.unit || '', category: r.category || '',
-    amount: r.amount || '', gst: r.gst || '', hasReceipt: !!r.image, attachCount: (r.attachments || []).length, imageVer: r.imageVer || 0,
+    amount: r.amount || '', gst: r.gst || '', currency: r.currency || 'AUD', fxAmount: r.fxAmount || '', hasReceipt: !!r.image, attachCount: (r.attachments || []).length, imageVer: r.imageVer || 0,
   });
   const showVal = (k, v) => (k === 'amount' || k === 'gst') ? (v === '' ? '(blank)' : money(v)) : k === 'imageVer' ? 'version ' + (v + 1) : k === 'date' ? fmtDay(v) : (v === '' ? '(blank)' : String(v));
 
@@ -124,11 +124,27 @@
     return out;
   }
 
-  /** Report order: by business unit, then date. Gives each receipt a reference R1, R2… */
+  /* ----- Foreign currency -----
+     A receipt keeps its own currency's total/GST in amount/gst. For a non-AUD receipt the AUD the card
+     was actually charged is in audAmount (from the bank statement or typed in). Everything that adds up
+     money – claim totals, PDF, spreadsheet, reconciliation – works from the AUD view below. */
+  const isForeign = r => !!r.currency && r.currency !== 'AUD';
+  function audView(r) {
+    if (!isForeign(r)) return r;
+    const aud = r.audAmount === '' || r.audAmount == null ? '' : String(r.audAmount);
+    const fx = parseFloat(r.amount);
+    const rate = aud !== '' && fx ? parseFloat(aud) / fx : null;
+    const gst = aud === '' ? '' : ((parseFloat(r.gst) || 0) && rate ? (Math.round(parseFloat(r.gst) * rate * 100) / 100).toFixed(2) : '0.00');
+    return { ...r, fxAmount: r.amount, fxGst: r.gst, amount: aud, gst, rate };
+  }
+  const audTotal = r => parseFloat(audView(r).amount) || 0;
+  const fxLabel = r => isForeign(r) ? `${r.currency} ${(parseFloat(r.fxAmount ?? r.amount) || 0).toFixed(2)}` : '';
+
+  /** Report order: by business unit, then date. Gives each receipt a reference R1, R2… (amounts in AUD) */
   function orderForReport(recs) {
     const unitRank = u => { const i = UNITS.indexOf(u); return i < 0 ? 99 : i; };
     return recs.slice().sort((a, b) => unitRank(a.unit) - unitRank(b.unit) || (a.date || '').localeCompare(b.date || '') || a.created - b.created)
-      .map((r, i) => ({ ...r, ref: 'R' + (i + 1) }));
+      .map((r, i) => ({ ...audView(r), ref: 'R' + (i + 1) }));
   }
 
   /* ---------------- Branding ---------------- */
@@ -166,8 +182,9 @@
       if ((filter === 'submitted') !== isSubmitted) continue;
       shown++;
       const recs = months.get(m).sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.created - a.created);
-      const total = recs.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
-      const byUnit = UNITS.map(u => [u, recs.filter(r => r.unit === u).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)]).filter(([, v]) => v);
+      const total = recs.reduce((s, r) => s + audTotal(r), 0);
+      const byUnit = UNITS.map(u => [u, recs.filter(r => r.unit === u).reduce((s, r) => s + audTotal(r), 0)]).filter(([, v]) => v);
+      const needAud = recs.filter(r => isForeign(r) && audView(r).amount === '').length;
       const unassigned = recs.filter(r => !r.unit).length;
       const noReceipt = recs.filter(r => !r.image).length;
       const last = claim.submissions[claim.submissions.length - 1];
@@ -183,7 +200,7 @@
         <div class="month-head">
           <div>
             <h2>${monthLabel(m)}</h2>
-            <div class="month-meta">${plural(recs.length, 'receipt')}${byUnit.map(([u, v]) => ` · ${u} ${money(v)}`).join('')}${unassigned ? ` · <span class="warn">${unassigned} without business unit</span>` : ''}${noReceipt ? ` · <span class="warn">${plural(noReceipt, 'receipt')} to follow</span>` : ''}</div>
+            <div class="month-meta">${plural(recs.length, 'receipt')}${byUnit.map(([u, v]) => ` · ${u} ${money(v)}`).join('')}${unassigned ? ` · <span class="warn">${unassigned} without business unit</span>` : ''}${noReceipt ? ` · <span class="warn">${plural(noReceipt, 'receipt')} to follow</span>` : ''}${needAud ? ` · <span class="warn">${needAud} need${needAud === 1 ? 's' : ''} AUD amount</span>` : ''}</div>
           </div>
           <div class="month-total">${money(total) || '$0.00'}${status}</div>
         </div>
@@ -209,7 +226,9 @@
             <div class="purpose">${escapeHtml(r.purpose || '')}</div>
             <div class="meta">${escapeHtml(fmtDay(r.date))}${r.unit ? ` · <span class="unit-chip">${escapeHtml(r.unit)}</span>` : ' · <span class="warn">No unit</span>'} · ${escapeHtml(r.category || '')}${n ? ` · 📎${n}` : ''}</div>
           </div>
-          <div class="amt">${money(r.amount)}${r.gst !== undefined && r.gst !== '' ? `<div class="gst-line">GST ${money(r.gst)}</div>` : ''}${isSubmitted ? `<div class="lock">${LOCK_ICON}</div>` : ''}</div>`;
+          <div class="amt">${isForeign(r)
+            ? `${audView(r).amount !== '' ? money(audView(r).amount) : '<span class="warn">AUD?</span>'}<div class="gst-line">${escapeHtml(fxLabel(r))}</div>`
+            : `${money(r.amount)}${r.gst !== undefined && r.gst !== '' ? `<div class="gst-line">GST ${money(r.gst)}</div>` : ''}`}${isSubmitted ? `<div class="lock">${LOCK_ICON}</div>` : ''}</div>`;
         ul.appendChild(li);
       }
       wrap.appendChild(sec);
@@ -572,6 +591,10 @@
     f.amount.value = editing.amount || '';
     f.gst.value = editing.gst || '';
     gstMode = editing.gstMode || 'auto';
+    f.currency.value = editing.currency || 'AUD';
+    f.audAmount.value = editing.audAmount || '';
+    audSource = editing.audSource || '';
+    $('fxCands').innerHTML = '';
     updateMoney();
     f.querySelectorAll('.filled').forEach(el => el.classList.remove('filled'));
     $('ocrStatus').hidden = true;
@@ -628,17 +651,70 @@
   const num = v => { const n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : null; };
   const fix2 = n => (n == null ? '' : ReceiptOcr.round2(n).toFixed(2));
 
+  let audSource = ''; // 'bank' | 'manual' – where a foreign receipt's AUD amount came from
   function updateMoney() {
     const f = $('editForm');
+    const cur = f.currency.value || 'AUD';
+    const foreign = cur !== 'AUD';
     const total = num(f.amount.value);
-    if (gstMode === 'auto') f.gst.value = total == null ? '' : fix2(ReceiptOcr.gstFromTotal(total));
+    // Overseas purchases carry no Australian GST, so "auto" means none.
+    if (gstMode === 'auto') f.gst.value = total == null ? '' : foreign ? '0.00' : fix2(ReceiptOcr.gstFromTotal(total));
     const gst = num(f.gst.value) || 0;
     f.exgst.value = total == null ? '' : fix2(total - gst);
+    $('totalLabel').textContent = foreign ? `Total (${cur})` : 'Total (inc GST)';
+    $('gstName').textContent = foreign ? 'Tax' : 'GST';
+    $('exLabel').textContent = foreign ? 'Ex tax' : 'Ex GST';
+    $('gstAutoBtn').textContent = foreign ? 'No AU GST' : 'GST = 1/11 of total';
+    $('gstNoneBtn').hidden = foreign;
     const label = $('gstMode');
-    label.textContent = { auto: '· auto 1/11', receipt: '· from receipt', manual: '· edited' }[gstMode];
+    label.textContent = { auto: foreign ? '· none (overseas)' : '· auto 1/11', receipt: '· from receipt', manual: '· edited' }[gstMode];
     label.classList.toggle('manual', gstMode === 'manual');
     $('gstWarn').hidden = !(total != null && gst > total);
+    // Second box: the AUD amount for a foreign receipt.
+    $('fxCard').hidden = !foreign;
+    if (foreign) {
+      const aud = num(f.audAmount.value);
+      $('fxSource').textContent = aud == null ? '' : audSource === 'bank' ? '· from bank statement' : '· entered';
+      $('fxRate').textContent = aud != null && total ? `Rate: 1 ${cur} = ${(aud / total).toFixed(4)} AUD` : `Use the AUD amount on your bank or card statement${settings.statement ? '' : ' (load one in Reconcile to look it up)'}.`;
+    }
   }
+  $('editForm').currency.addEventListener('change', () => { $('fxCands').innerHTML = ''; updateMoney(); });
+  $('editForm').audAmount.addEventListener('input', () => { audSource = 'manual'; updateMoney(); });
+  $('editForm').audAmount.addEventListener('blur', e => { const n = num(e.target.value); if (n != null) e.target.value = fix2(n); });
+
+  /** Suggest statement lines for a foreign receipt: same few days, vendor name or foreign amount in the description. */
+  $('fxFindBtn').onclick = () => {
+    const box = $('fxCands');
+    const st = settings.statement;
+    if (!st || !st.transactions.length) {
+      box.innerHTML = '<p class="small muted">No bank statement loaded yet. Tap the bank icon on the main screen to load one, then come back – or type the AUD amount in.</p>';
+      return;
+    }
+    const f = $('editForm');
+    const date = f.date.value, fxAmt = num(f.amount.value), vendor = f.vendor.value;
+    const day = d => Date.parse(d) / 86400000;
+    const cands = st.transactions
+      .map(t => {
+        const dd = date ? Math.abs(day(t.date) - day(date)) : 0;
+        const hasAmt = fxAmt != null && t.desc.replace(/,/g, '').includes(fxAmt.toFixed(2));
+        const sim = Recon.similarity(vendor, t.desc);
+        return { t, dd, score: dd + (hasAmt ? -20 : 0) - sim * 6 + (/(intl|international|foreign|o\/s|overseas|fx)/i.test(t.desc) ? -1 : 0) };
+      })
+      .filter(c => c.dd <= 7)
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 6);
+    box.innerHTML = cands.length
+      ? '<p class="small muted">Tap the matching charge:</p>' + cands.map(c => `<button type="button" class="fx-cand" data-amt="${c.t.amount.toFixed(2)}"><span>${escapeHtml(fmtDay(c.t.date))}</span><span class="rc-desc">${escapeHtml(c.t.desc)}</span><strong>${money(c.t.amount)}</strong></button>`).join('')
+      : '<p class="small muted">Nothing on the loaded statement within a week of this date – type the AUD amount in.</p>';
+  };
+  $('fxCands').addEventListener('click', e => {
+    const b = e.target.closest('.fx-cand');
+    if (!b) return;
+    $('editForm').audAmount.value = b.dataset.amt;
+    audSource = 'bank';
+    $('fxCands').innerHTML = '';
+    updateMoney();
+  });
   $('editForm').amount.addEventListener('input', updateMoney);
   $('editForm').gst.addEventListener('input', () => { gstMode = 'manual'; updateMoney(); });
   $('editForm').amount.addEventListener('blur', e => { const n = num(e.target.value); if (n != null) e.target.value = fix2(n); });
@@ -684,12 +760,19 @@
         f[field].classList.add('filled');
         filled.push(field);
       };
+      if (r.currency && (overwrite || editing.isNew) && f.currency.value !== r.currency) {
+        f.currency.value = r.currency;
+        f.currency.classList.add('filled');
+        if (r.currency !== 'AUD') { gstMode = 'auto'; f.gst.value = ''; }
+      }
       put('vendor', r.vendor);
       const totalWasEmpty = !f.amount.value.trim();
       put('amount', r.total != null ? fix2(r.total) : '');
       if (overwrite || (totalWasEmpty && gstMode !== 'manual')) {
-        gstMode = r.gstFound ? 'receipt' : 'auto';
-        if (r.gstFound) { f.gst.value = fix2(r.gst); f.gst.classList.add('filled'); }
+        // Overseas tax (US sales tax, VAT…) isn't claimable GST – foreign receipts default to no GST.
+        const foreign = f.currency.value && f.currency.value !== 'AUD';
+        gstMode = r.gstFound && !foreign ? 'receipt' : 'auto';
+        if (r.gstFound && !foreign) { f.gst.value = fix2(r.gst); f.gst.classList.add('filled'); }
       }
       if (r.date && (overwrite || editing.isNew)) { f.date.value = r.date; f.date.classList.add('filled'); }
       if (r.category && (overwrite || !categoryTouched)) { setCategory(r.category); f.category.classList.add('filled'); }
@@ -760,6 +843,9 @@
       date: f.date.value || editing.date,
       category: readCategory(),
       unit: readUnit(),
+      currency: f.currency.value || 'AUD',
+      audAmount: f.currency.value !== 'AUD' && num(f.audAmount.value) != null ? fix2(num(f.audAmount.value)) : '',
+      audSource: f.currency.value !== 'AUD' ? audSource : '',
     });
   }
 
@@ -941,13 +1027,13 @@
 
   async function openSubmit(month, { copy }) {
     const recs = (await db.all()).filter(r => monthOf(r) === month);
-    const missing = recs.filter(r => !r.unit || r.amount === '' || r.amount == null || !r.vendor);
+    const missing = recs.filter(r => !r.unit || r.amount === '' || r.amount == null || !r.vendor || (isForeign(r) && audView(r).amount === ''));
     if (!copy && missing.length) {
-      toast(`${plural(missing.length, 'receipt')} still need${missing.length === 1 ? 's' : ''} a vendor, total or business unit.`, 4500);
+      toast(`${plural(missing.length, 'receipt')} still need${missing.length === 1 ? 's' : ''} a vendor, total, business unit or AUD amount.`, 4500);
       return openEdit(missing[0].id);
     }
     const toFollow = recs.filter(r => !r.image);
-    if (!copy && toFollow.length && !confirm(`${plural(toFollow.length, 'receipt')} in this claim ${toFollow.length === 1 ? 'is' : 'are'} still to follow:\n\n${toFollow.map(r => `• ${r.vendor} ${money(r.amount)}`).join('\n')}\n\nSubmit anyway? They'll be marked “Receipt to follow”. Adding the photo later reopens the claim and shows up on the exception report.`)) return;
+    if (!copy && toFollow.length && !confirm(`${plural(toFollow.length, 'receipt')} in this claim ${toFollow.length === 1 ? 'is' : 'are'} still to follow:\n\n${toFollow.map(r => `• ${r.vendor} ${money(audTotal(r))}`).join('\n')}\n\nSubmit anyway? They'll be marked “Receipt to follow”. Adding the photo later reopens the claim and shows up on the exception report.`)) return;
     const sel = $('sendTo');
     sel.innerHTML = '';
     for (const em of settings.emails) sel.add(new Option(em, em));
@@ -1057,8 +1143,10 @@
       r.ref, label, r.unit || '', { v: r.date, t: 'date' }, r.vendor || '', r.abn || '', r.category || '', { v: r.purpose || '', t: 'wrap' },
       { v: (parseFloat(r.amount) || 0) - (parseFloat(r.gst) || 0), t: 'money' }, { v: parseFloat(r.gst) || 0, t: 'money' }, { v: parseFloat(r.amount) || 0, t: 'money' },
       (r.attachments || []).length, r.image ? 'Yes' : 'To follow',
+      isForeign(r) ? r.currency : 'AUD', isForeign(r) ? { v: parseFloat(r.fxAmount) || 0, t: 'money' } : '', isForeign(r) && r.rate ? { v: Math.round(r.rate * 10000) / 10000, t: 'number' } : '',
+      isForeign(r) ? (r.audSource === 'bank' ? 'Bank statement' : 'Entered') : '',
     ]);
-    lines.push(null, ['', '', '', '', { v: 'TOTAL', t: 'bold' }, '', '', '', { v: total - totalGst, t: 'boldMoney' }, { v: totalGst, t: 'boldMoney' }, { v: total, t: 'boldMoney' }, '', '']);
+    lines.push(null, ['', '', '', '', { v: 'TOTAL', t: 'bold' }, '', '', '', { v: total - totalGst, t: 'boldMoney' }, { v: totalGst, t: 'boldMoney' }, { v: total, t: 'boldMoney' }, '', '', '', '', '', '']);
     const sheets = [{
       name: 'Claim lines',
       columns: [
@@ -1066,6 +1154,7 @@
         { header: 'Vendor', width: 28 }, { header: 'ABN', width: 16 }, { header: 'Expense type', width: 22 }, { header: 'Purpose', width: 40 },
         { header: 'Ex GST', width: 12, type: 'money' }, { header: 'GST', width: 10, type: 'money' }, { header: 'Total', width: 12, type: 'money' },
         { header: 'Supporting docs', width: 15, type: 'number' }, { header: 'Receipt', width: 11 },
+        { header: 'Currency', width: 10 }, { header: 'Foreign total', width: 13, type: 'money' }, { header: 'Rate to AUD', width: 12, type: 'number' }, { header: 'AUD from', width: 15 },
       ],
       rows: lines,
     }];
@@ -1125,10 +1214,11 @@
 
   function buildClaimCsv(ordered, label) {
     const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const head = ['Ref', 'Claim month', 'Business unit', 'Date', 'Vendor', 'ABN', 'Expense type', 'Purpose', 'Ex GST', 'GST', 'Total', 'Supporting docs', 'Receipt'];
+    const head = ['Ref', 'Claim month', 'Business unit', 'Date', 'Vendor', 'ABN', 'Expense type', 'Purpose', 'Ex GST (AUD)', 'GST (AUD)', 'Total (AUD)', 'Supporting docs', 'Receipt', 'Currency', 'Foreign total', 'Rate to AUD'];
     const rows = ordered.map(r => [r.ref, label, r.unit || '', r.date ? r.date.split('-').reverse().join('/') : '', r.vendor || '', r.abn || '', r.category || '', r.purpose || '',
       ((parseFloat(r.amount) || 0) - (parseFloat(r.gst) || 0)).toFixed(2), (parseFloat(r.gst) || 0).toFixed(2), (parseFloat(r.amount) || 0).toFixed(2),
-      (r.attachments || []).length, r.image ? 'Yes' : 'To follow']);
+      (r.attachments || []).length, r.image ? 'Yes' : 'To follow',
+      isForeign(r) ? r.currency : 'AUD', isForeign(r) ? (parseFloat(r.fxAmount) || 0).toFixed(2) : '', isForeign(r) && r.rate ? r.rate.toFixed(4) : '']);
     return '\uFEFF' + [head, ...rows].map(r => r.map(q).join(',')).join('\r\n');
   }
 
@@ -1221,9 +1311,23 @@
     }
   });
 
+  /** Put the AUD charge from the statement onto a foreign-currency claim. */
+  async function useBankAud(id, amount) {
+    const rec = await db.get(id);
+    if (!rec) return;
+    const month = monthOf(rec);
+    if (await isLocked(month)) {
+      if (!confirm(`The ${monthLabel(month)} claim is submitted. Reopen it to add the AUD amount?`)) return;
+      await reopenClaim(month, { ask: false });
+    }
+    await db.put({ ...rec, audAmount: amount, audSource: 'bank', updated: Date.now() });
+    toast(`${rec.vendor}: AUD ${money(amount)} added from the statement`);
+    if (settings.statement) runRecon(settings.statement);
+  }
+
   async function runRecon(stmt) {
     const recs = await db.all();
-    const result = Recon.reconcile(stmt.transactions, recs, stmt);
+    const result = Recon.reconcile(stmt.transactions, recs.map(audView), stmt);
     reconData = { ...stmt, result };
     renderRecon();
   }
@@ -1237,7 +1341,7 @@
     const unclaimed = r.unclaimed.filter(t => !ignored.has(t.key));
     const personal = r.unclaimed.filter(t => ignored.has(t.key));
     const tx = t => `<div class="rc-line"><span>${escapeHtml(fmtDay(t.date))}</span><span class="rc-desc">${escapeHtml(t.desc)}</span><strong>${money(t.amount)}</strong></div>`;
-    const cl = c => `<div class="rc-line"><span>${escapeHtml(fmtDay(c.date))}</span><span class="rc-desc">${escapeHtml(c.vendor || '')}${c.unit ? ` · ${escapeHtml(c.unit)}` : ''}</span><strong>${money(c.amount)}</strong></div>`;
+    const cl = c => `<div class="rc-line"><span>${escapeHtml(fmtDay(c.date))}</span><span class="rc-desc">${escapeHtml(c.vendor || '')}${c.unit ? ` · ${escapeHtml(c.unit)}` : ''}${isForeign(c) ? ` · ${escapeHtml(fxLabel(c))}` : ''}</span><strong>${c.amount !== '' ? money(c.amount) : 'AUD ?'}</strong></div>`;
     out.innerHTML = `
       <div class="rc-file">${escapeHtml(reconData.name)} · ${escapeHtml(fmtDay(reconData.from))} – ${escapeHtml(fmtDay(reconData.to))} · ${plural(reconData.transactions.length, 'purchase')}${reconData.note ? `<br><span class="muted small">${escapeHtml(reconData.note)}</span>` : ''}</div>
       <div class="rc-tiles">
@@ -1246,6 +1350,8 @@
         <div class="rc-tile warn"><b>${unclaimed.length}</b>Not claimed</div>
         <div class="rc-tile info"><b>${r.notOnStatement.length}</b>Not on statement</div>
       </div>
+      ${r.fxFound.length ? `<h3 class="rc-h info">Foreign currency – AUD charge found</h3><p class="muted small">These overseas receipts have no AUD amount yet. The likely card charge is shown – tap to use it.</p>
+        ${r.fxFound.map(m => `<div class="rc-card info">${tx(m.tx)}${cl(m.claim)}<div class="rc-actions"><button class="btn small ghost" data-open="${m.claim.id}">Open claim</button><button class="btn small" data-fx="${m.claim.id}|${m.tx.amount.toFixed(2)}">Use ${money(m.tx.amount)} AUD</button></div></div>`).join('')}` : ''}
       ${r.mismatched.length ? `<h3 class="rc-h bad">Incorrect claims</h3><p class="muted small">The bank and the claim don’t agree. Check the receipt and fix the claim.</p>
         ${r.mismatched.map(m => `<div class="rc-card bad"><div class="rc-issue">${escapeHtml(m.issue)}</div>${tx(m.tx)}${cl(m.claim)}<div class="rc-actions"><button class="btn small" data-open="${m.claim.id}">Open claim</button></div></div>`).join('')}` : ''}
       ${unclaimed.length ? `<h3 class="rc-h warn">On the statement but not claimed</h3><p class="muted small">Missing claims – or personal spending you can mark as not claimable.</p>
@@ -1260,6 +1366,7 @@
     const b = e.target.closest('button');
     if (!b) return;
     if (b.dataset.open) openEdit(b.dataset.open);
+    if (b.dataset.fx) useBankAud(...b.dataset.fx.split('|'));
     if (b.dataset.ignore) { settings.reconIgnore = [...new Set([...settings.reconIgnore, b.dataset.ignore])]; saveSettings(); renderRecon(); }
     if (b.dataset.unignore) { settings.reconIgnore = settings.reconIgnore.filter(k => k !== b.dataset.unignore); saveSettings(); renderRecon(); }
     if (b.dataset.add) {
@@ -1290,6 +1397,7 @@
     ]);
     r.mismatched.forEach(m => add('Incorrect', m.tx, m.claim, m.issue));
     r.unclaimed.forEach(t => add(ignored.has(t.key) ? 'Personal' : 'Not claimed', t, null, ignored.has(t.key) ? 'Marked personal / not claimable' : 'On statement, no claim'));
+    r.fxFound.forEach(m => add('Foreign – AUD found', m.tx, m.claim, `${fxLabel(m.claim)} receipt – AUD charge on statement`));
     r.notOnStatement.forEach(c => add('Not on statement', null, c, 'Claimed, not found on this statement'));
     r.matched.forEach(m => add('Matched', m.tx, m.claim, ''));
     const blob = Xlsx.buildXlsx([{

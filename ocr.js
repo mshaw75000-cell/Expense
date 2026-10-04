@@ -109,6 +109,7 @@
     top.forEach((l, i) => {
       const n = letters(l);
       if (n < 3 || NOT_VENDOR.test(l) || amountsIn(l).length || /\d{2}[\/.-]\d{2}/.test(l)) return;
+      if (/^\s*\d+[a-z]?\s/i.test(l)) return; // street address ("1650 Broadway…")
       const ratio = n / l.replace(/\s/g, '').length;
       if (ratio < 0.6) return;
       const upper = l === l.toUpperCase() ? 1.3 : 1;
@@ -260,7 +261,24 @@
       date: findDate(lines),
       abn: findAbn(text),
       category: guessCategory(text),
+      currency: findCurrency(text),
     };
+  }
+
+  /* ---------------- Currency ---------------- */
+  // A plain "$" is taken as AUD. Returns '' when nothing points elsewhere.
+  const CURRENCIES = [
+    ['AUD', /\bA\$|\bAU\$|\bAUD\b/g], ['USD', /\bUS\$|\bUSD\b/g], ['NZD', /\bNZ\$|\bNZD\b/g], ['EUR', /€|\bEUR\b/g], ['GBP', /£|\bGBP\b/g],
+    ['SGD', /\bS\$|\bSGD\b/g], ['HKD', /\bHK\$|\bHKD\b/g], ['JPY', /¥|\bJPY\b|円/g], ['CNY', /\bCNY\b|\bRMB\b|元/g], ['CAD', /\bC\$|\bCA\$|\bCAD\b/g],
+    ['CHF', /\bCHF\b/g], ['THB', /฿|\bTHB\b/g], ['IDR', /\bIDR\b|\bRp\.?\s?\d/g], ['INR', /₹|\bINR\b/g], ['FJD', /\bFJ\$|\bFJD\b/g],
+  ];
+  function findCurrency(text) {
+    let best = '', count = 0;
+    for (const [code, re] of CURRENCIES) {
+      const n = (String(text).match(re) || []).length;
+      if (n > count) { best = code; count = n; }
+    }
+    return best;
   }
 
   /* ---------------- Well-known senders (emails, PDF receipts) ---------------- */
@@ -298,7 +316,7 @@
     return '';
   }
 
-  const api = { readText, readReceipt, parseReceipt, guessCategory, gstFromTotal, round2, GST_RATE };
+  const api = { readText, readReceipt, parseReceipt, findCurrency, guessCategory, gstFromTotal, round2, GST_RATE };
   global.ReceiptOcr = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

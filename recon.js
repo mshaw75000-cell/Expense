@@ -190,10 +190,31 @@
    */
   function reconcile(transactions, receipts, { from, to } = {}) {
     const lo = from ? shift(from, -5) : '0000', hi = to ? shift(to, 2) : '9999';
-    const claims = receipts.filter(r => r.date && r.date >= lo && r.date <= hi && parseFloat(r.amount));
+    const inRange = receipts.filter(r => r.date && r.date >= lo && r.date <= hi);
+    const claims = inRange.filter(r => parseFloat(r.amount));
     const usedT = new Set(), usedR = new Set();
     const matched = [], mismatched = [];
     const name = r => [r.vendor, r.purpose].filter(Boolean).join(' ');
+
+    // 0. Foreign-currency claims with no AUD amount yet: find the card charge by vendor name,
+    //    the foreign amount appearing in the bank text (e.g. "USD 45.00"), and date.
+    const fxPending = inRange.filter(r => r.currency && r.currency !== 'AUD' && !parseFloat(r.amount) && parseFloat(r.fxAmount));
+    const fxPairs = [];
+    fxPending.forEach((r, ri) => transactions.forEach((t, ti) => {
+      const d = days(t.date, r.date);
+      if (d > 5) return;
+      const hasAmt = t.desc.replace(/,/g, '').includes(parseFloat(r.fxAmount).toFixed(2));
+      const sim = similarity(r.vendor || name(r), t.desc);
+      if (!hasAmt && sim < 0.5) return;
+      fxPairs.push({ ri, ti, score: (hasAmt ? 0 : 10) + d - sim * 3 });
+    }));
+    fxPairs.sort((a, b) => a.score - b.score);
+    const fxFound = [], fxUsed = new Set();
+    for (const p of fxPairs) {
+      if (usedT.has(p.ti) || fxUsed.has(p.ri)) continue;
+      usedT.add(p.ti); fxUsed.add(p.ri);
+      fxFound.push({ tx: transactions[p.ti], claim: fxPending[p.ri] });
+    }
 
     // 1. Same amount, dates within 5 days (cards often post a few days after the purchase).
     const pairs = [];
@@ -241,8 +262,8 @@
     }
 
     const unclaimed = transactions.filter((_, i) => !usedT.has(i));
-    const notOnStatement = claims.filter((_, i) => !usedR.has(i));
-    return { matched, mismatched, unclaimed, notOnStatement };
+    const notOnStatement = [...claims.filter((_, i) => !usedR.has(i)), ...fxPending.filter((_, i) => !fxUsed.has(i))];
+    return { matched, mismatched, unclaimed, notOnStatement, fxFound };
   }
 
   const api = { parseStatement, reconcile, parseDate, parseAmount, similarity };

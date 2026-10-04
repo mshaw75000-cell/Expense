@@ -29,6 +29,17 @@ The submit screen has a **Send with** choice (remembered for next time):
 - **My default email app** – opens your default email app with the message filled in; the files are saved for you to attach.
 - **Just save the files** – saves the PDF and spreadsheet to your phone.
 
+## Foreign currency
+
+Each receipt has a **Currency** (AUD by default; the reader picks up US$, NZ$, €, £ and others from the receipt). For any other currency:
+
+- The total is entered in that currency, and Australian **GST defaults to none** (overseas sales tax/VAT isn't claimable GST).
+- A second box, **Amount in AUD**, appears for what your card was actually charged. Fill it by:
+  - **Find on bank statement** – lists charges from the loaded statement within a week of the receipt date, best match first (vendor name, or the foreign amount shown in the bank text such as "USD 23.50"); tap the right one; or
+  - typing it in.
+- **Reconcile** also spots overseas receipts without an AUD amount and offers **Use $X AUD** from the matching charge.
+- A month can't be submitted until every foreign receipt has its AUD amount. Claim totals, the PDF and the spreadsheet use AUD; the PDF and spreadsheet also show the foreign amount, the rate and whether the AUD came from the bank statement or was entered.
+
 ## Locking, reopening and exception reports
 
 - A submitted claim is **locked**: its receipts can be viewed but not changed or deleted.
