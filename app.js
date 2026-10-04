@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '13';
+  const APP_VERSION = '14';
   const UNITS = ['Mentis', 'Macrack'];
 
   /* ---------------- Storage ---------------- */
@@ -53,13 +53,14 @@
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
   /* ---------------- UI helpers ---------------- */
-  const views = ['listView', 'cropView', 'editView', 'settingsView', 'reconView'];
-  const titles = { listView: 'Claims', cropView: 'Crop', editView: 'Receipt', settingsView: 'Settings', reconView: 'Reconcile' };
+  const views = ['listView', 'cropView', 'editView', 'settingsView', 'reconView', 'dashView'];
+  const titles = { listView: 'Claims', cropView: 'Crop', editView: 'Receipt', settingsView: 'Settings', reconView: 'Reconcile', dashView: 'Spending' };
   function show(view) {
     views.forEach(v => { $(v).hidden = v !== view; });
     $('viewTitle').textContent = titles[view];
     $('settingsBtn').hidden = view !== 'listView';
     $('reconBtn').hidden = view !== 'listView';
+    $('dashBtn').hidden = view !== 'listView';
     window.scrollTo(0, 0);
   }
   let toastTimer;
@@ -76,7 +77,7 @@
   const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const toBlob = (canvas, type = 'image/jpeg', q = 0.85) => new Promise(r => canvas.toBlob(r, type, q));
   const isEmail = s => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
-  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const plural = (n, w) => `${n} ${n === 1 ? w : w === 'person' ? 'people' : w + 's'}`;
   const safeFile = s => String(s || '').replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '');
   const fmtDay = iso => iso ? ExpensePdf.fmtDate(iso) : '';
 
@@ -93,10 +94,10 @@
   // What accounts sees as a change: these fields, compared with the last submission.
   const TRACKED = [
     ['date', 'Date'], ['vendor', 'Vendor'], ['purpose', 'Purpose'], ['unit', 'Business unit'], ['category', 'Expense type'],
-    ['amount', 'Total (AUD)'], ['gst', 'GST'], ['currency', 'Currency'], ['fxAmount', 'Foreign amount'], ['audBasis', 'AUD amount basis'], ['hasReceipt', 'Receipt'], ['attachCount', 'Supporting documents'], ['imageVer', 'Receipt image'],
+    ['amount', 'Total (AUD)'], ['gst', 'GST'], ['currency', 'Currency'], ['fxAmount', 'Foreign amount'], ['audBasis', 'AUD amount basis'], ['hasReceipt', 'Receipt'], ['attachCount', 'Supporting documents'], ['imageVer', 'Receipt image'], ['attendeesText', 'Attendees'], ['abn', 'Supplier ABN'],
   ];
   const snapshotOf = (r, ref) => ({
-    id: r.id, ref, date: r.date || '', vendor: r.vendor || '', purpose: r.purpose || '', unit: r.unit || '', category: r.category || '',
+    id: r.lineKey || r.id, ref, attendeesText: r.attendeesText || '', abn: r.abn || '', date: r.date || '', vendor: r.vendor || '', purpose: r.purpose || '', unit: r.unit || '', category: r.category || '',
     amount: r.amount || '', gst: r.gst || '', currency: r.currency || 'AUD', fxAmount: r.fxAmount || '', audBasis: r.audBasis || '', hasReceipt: !!r.image, attachCount: (r.attachments || []).length, imageVer: r.imageVer || 0,
   });
   const showVal = (k, v) => (k === 'amount' || k === 'gst') ? (v === '' ? '(blank)' : money(v)) : k === 'imageVer' ? 'version ' + (v + 1) : k === 'date' ? fmtDay(v) : (v === '' ? '(blank)' : String(v));
@@ -110,7 +111,7 @@
     for (const old of last.items) {
       const cur = now.get(old.id);
       if (!cur) { out.push({ ref: old.ref, type: 'Removed', vendor: old.vendor, detail: `Removed from the claim (was ${money(old.amount)} on ${fmtDay(old.date)}, ${old.unit})` }); continue; }
-      const changes = TRACKED.filter(([k]) => String(old[k]) !== String(cur[k]))
+      const changes = TRACKED.filter(([k]) => k in old && String(old[k] ?? '') !== String(cur[k] ?? '')) // fields added in later versions aren't in older snapshots
         .filter(([k]) => !(k === 'imageVer' && !old.hasReceipt)) // first receipt photo is reported as "added", not "replaced"
         .map(([k, label]) => k === 'imageVer' ? 'Receipt image replaced'
           : k === 'hasReceipt' ? (cur.hasReceipt ? 'Receipt photo added' : 'Receipt photo removed')
@@ -183,11 +184,86 @@
   const audTotal = r => parseFloat(audView(r).amount) || 0;
   const fxLabel = r => isForeign(r) ? `${r.currency} ${(parseFloat(r.fxAmount ?? r.amount) || 0).toFixed(2)}` : '';
 
+  /* ----- Tax invoices -----
+     The business can only claim the GST on a purchase over $82.50 (GST-inclusive) with a tax invoice
+     showing the supplier's ABN. */
+  const TAX_INVOICE_LIMIT = 82.5;
+  function validAbn(abn) {
+    const d = String(abn || '').replace(/\D/g, '');
+    if (d.length !== 11) return false;
+    const w = [10, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19];
+    const sum = d.split('').reduce((s, c, i) => s + (Number(c) - (i === 0 ? 1 : 0)) * w[i], 0);
+    return sum % 89 === 0;
+  }
+  const fmtAbn = abn => String(abn || '').replace(/\D/g, '').replace(/^(\d{2})(\d{3})(\d{3})(\d{3})$/, '$1 $2 $3 $4');
+  function taxInvoiceIssue(r) {
+    if (isForeign(r)) return '';
+    if ((parseFloat(r.amount) || 0) <= TAX_INVOICE_LIMIT) return '';
+    if (!(parseFloat(r.gst) > 0)) return '';
+    if (r.taxInvoiceOk || validAbn(r.abn)) return '';
+    return 'No tax invoice (supplier ABN) – GST may not be claimable';
+  }
+
+  /* ----- Attendees / employees travelling ----- */
+  const MEAL_CATS = ['Meals & Entertainment'];
+  const TRAVEL_CATS = ['Travel – Air', 'Travel – Ground', 'Lodging'];
+  const PERSON_TYPES = ['Employee', 'Client', 'Supplier', 'Other'];
+  const peopleText = list => (list || []).filter(p => p.name).map(p => `${p.name}${p.org || p.type ? ` (${[p.org, p.type && p.type.toLowerCase()].filter(Boolean).join(', ')})` : ''}`).join('; ');
+  const catsOf = r => (r.splits && r.splits.length ? r.splits.map(s => s.category) : [r.category]);
+  const needsPeople = r => catsOf(r).some(c => MEAL_CATS.includes(c) || TRAVEL_CATS.includes(c));
+
+  /* ----- Split bills -----
+     A receipt can be split into lines (e.g. hotel: room / meals / parking), each with its own expense type,
+     business unit, amount and GST. Reports show one line per split (R3a, R3b…), sharing the receipt image. */
+  const hasSplits = r => Array.isArray(r.splits) && r.splits.length > 1;
+  function linesOf(r) {
+    const v = audView(r);
+    const base = { ...v, lineKey: r.id, receiptTotal: v.amount, receiptGst: v.gst, attendeesText: peopleText(r.attendees), taxInvIssue: taxInvoiceIssue(r) };
+    if (!hasSplits(r)) return [base];
+    const total = parseFloat(r.amount) || 0;
+    const k = v.amount === '' ? null : total ? (parseFloat(v.amount) || 0) / total : 1; // receipt currency → AUD
+    return r.splits.map((s, i) => ({
+      ...base, lineKey: `${r.id}:${s.id}`, splitIndex: i, splitCount: r.splits.length,
+      category: s.category, unit: s.unit, purpose: [r.purpose, s.note].filter(Boolean).join(' – '),
+      amount: k == null ? '' : ((parseFloat(s.amount) || 0) * k).toFixed(2),
+      gst: k == null ? '' : ((parseFloat(s.gst) || 0) * k).toFixed(2),
+      fxAmount: isForeign(r) ? s.amount : v.fxAmount,
+      attachments: i === 0 ? r.attachments : [],
+    }));
+  }
+  const unitTotals = recs => {
+    const t = {};
+    for (const r of recs) for (const l of linesOf(r)) if (l.unit) t[l.unit] = (t[l.unit] || 0) + (parseFloat(l.amount) || 0);
+    return t;
+  };
+
+  /* ----- Duplicates ----- */
+  const dupKey = r => isForeign(r) ? `${r.currency}${(parseFloat(r.amount) || 0).toFixed(2)}` : `AUD${(parseFloat(r.amount) || 0).toFixed(2)}`;
+  function looksDuplicate(a, b) {
+    if (a.id === b.id || !(parseFloat(a.amount) > 0)) return false;
+    if ((a.notDuplicateOf || []).includes(b.id) || (b.notDuplicateOf || []).includes(a.id)) return false;
+    if (dupKey(a) !== dupKey(b) || !a.date || !b.date) return false;
+    if (Math.abs(Date.parse(a.date) - Date.parse(b.date)) > 86400000) return false;
+    const va = (a.vendor || '').toLowerCase().trim(), vb = (b.vendor || '').toLowerCase().trim();
+    return va === vb || Recon.similarity(a.vendor, b.vendor) >= 0.5 || (!!a.sourceName && a.sourceName === b.sourceName);
+  }
+
+  /* ----- Remembering vendors ----- */
+  const vendorKey = v => String(v || '').toLowerCase().replace(/pty|ltd|limited|the\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
   /** Report order: by business unit, then date. Gives each receipt a reference R1, R2… (amounts in AUD) */
   function orderForReport(recs) {
     const unitRank = u => { const i = UNITS.indexOf(u); return i < 0 ? 99 : i; };
-    return recs.slice().sort((a, b) => unitRank(a.unit) - unitRank(b.unit) || (a.date || '').localeCompare(b.date || '') || a.created - b.created)
-      .map((r, i) => ({ ...audView(r), ref: 'R' + (i + 1) }));
+    const firstUnit = r => hasSplits(r) ? r.splits[0].unit : r.unit;
+    const sorted = recs.slice().sort((a, b) => unitRank(firstUnit(a)) - unitRank(firstUnit(b)) || (a.date || '').localeCompare(b.date || '') || a.created - b.created);
+    const lines = [];
+    sorted.forEach((r, i) => {
+      const ref = 'R' + (i + 1);
+      const ls = linesOf(r);
+      const summary = ls.length > 1 ? ls.map((l, k) => ({ ref: ref + String.fromCharCode(97 + k), category: l.category, unit: l.unit, amount: l.amount })) : null;
+      ls.forEach((l, k) => lines.push({ ...l, ref: ls.length > 1 ? ref + String.fromCharCode(97 + k) : ref, splitOfRef: ls.length > 1 ? ref : '', splitSummary: k === 0 ? summary : null }));
+    });
+    return lines.map((l, i) => ({ ...l, _o: i })).sort((a, b) => unitRank(a.unit) - unitRank(b.unit) || a._o - b._o);
   }
 
   /* ---------------- Branding ---------------- */
@@ -204,14 +280,57 @@
   /* ---------------- Claims list (grouped by month) ---------------- */
   let filter = 'open';
   let thumbUrls = [];
+  const search = { text: '', unit: '', cat: '', flag: '' }; // flag: 'tofollow' | 'taxinv' | 'dup' | 'people'
   const LOCK_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+  const FLAG_LABELS = { tofollow: 'receipts still to follow', taxinv: 'over $82.50 without a tax invoice', dup: 'possible duplicates', people: 'meals / travel without attendees' };
+  const searching = () => !!(search.text || search.unit || search.cat || search.flag);
+
+  function matchesSearch(r, flags) {
+    if (search.flag === 'tofollow' && r.image) return false;
+    if (search.flag === 'taxinv' && !taxInvoiceIssue(r)) return false;
+    if (search.flag === 'dup' && !flags.dup.has(r.id)) return false;
+    if (search.flag === 'people' && !(needsPeople(r) && !(r.attendees || []).some(p => p.name))) return false;
+    const ls = linesOf(r);
+    if (search.unit && !ls.some(l => l.unit === search.unit)) return false;
+    if (search.cat && !ls.some(l => l.category === search.cat)) return false;
+    if (search.text) {
+      const hay = [r.vendor, r.purpose, r.category, r.abn, r.currency, peopleText(r.attendees), r.date, fmtDay(r.date),
+        ...ls.map(l => [l.category, l.unit, l.amount, l.purpose].join(' ')), r.amount, audView(r).amount].join(' ').toLowerCase();
+      const words = search.text.toLowerCase().replace(/\$/g, '').split(/\s+/).filter(Boolean);
+      if (!words.every(w => hay.includes(w))) return false;
+    }
+    return true;
+  }
 
   async function renderList() {
     const [all, claims] = await Promise.all([db.all(), db.claims.all()]);
     const claimMap = new Map(claims.map(c => [c.month, c]));
+    const statusOf = m => (claimMap.get(m) || { status: 'open' }).status;
+
+    // Possible duplicates across everything on the phone.
+    const flags = { dup: new Set() };
+    const byKey = new Map();
+    for (const r of all) { const k = dupKey(r); if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push(r); }
+    for (const list of byKey.values()) for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+      if (looksDuplicate(list[i], list[j])) { flags.dup.add(list[i].id); flags.dup.add(list[j].id); }
+    }
+
+    renderReminders(all, statusOf, flags);
+
     const months = new Map();
-    for (const r of all) { const m = monthOf(r); if (!months.has(m)) months.set(m, []); months.get(m).push(r); }
-    for (const c of claims) if (!months.has(c.month) && c.status === 'reopened') months.set(c.month, []);
+    for (const r of all) {
+      if (searching() && !matchesSearch(r, flags)) continue;
+      const m = monthOf(r); if (!months.has(m)) months.set(m, []); months.get(m).push(r);
+    }
+    if (!searching()) for (const c of claims) if (!months.has(c.month) && c.status === 'reopened') months.set(c.month, []);
+
+    $('tabsBar').hidden = searching();
+    $('searchNote').hidden = !searching();
+    if (searching()) {
+      const n = [...months.values()].reduce((s, l) => s + l.length, 0);
+      $('searchNote').innerHTML = `${plural(n, 'receipt')}${search.flag ? ` – ${FLAG_LABELS[search.flag]}` : ''}, all months <button class="btn small ghost" id="clearSearch">Clear</button>`;
+      $('clearSearch').onclick = clearSearch;
+    }
 
     thumbUrls.forEach(URL.revokeObjectURL);
     thumbUrls = [];
@@ -222,14 +341,15 @@
     for (const m of keys) {
       const claim = claimMap.get(m) || { month: m, status: 'open', submissions: [] };
       const isSubmitted = claim.status === 'submitted';
-      if ((filter === 'submitted') !== isSubmitted) continue;
+      if (!searching() && (filter === 'submitted') !== isSubmitted) continue;
       shown++;
       const recs = months.get(m).sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.created - a.created);
       const total = recs.reduce((s, r) => s + audTotal(r), 0);
-      const byUnit = UNITS.map(u => [u, recs.filter(r => r.unit === u).reduce((s, r) => s + audTotal(r), 0)]).filter(([, v]) => v);
+      const ut = unitTotals(recs);
+      const byUnit = UNITS.map(u => [u, ut[u] || 0]).filter(([, v]) => v);
       const needAud = recs.filter(r => isForeign(r) && audView(r).amount === '').length;
       const estAud = recs.filter(r => isForeign(r) && audView(r).audEstimated).length;
-      const unassigned = recs.filter(r => !r.unit).length;
+      const unassigned = recs.filter(r => linesOf(r).some(l => !l.unit)).length;
       const noReceipt = recs.filter(r => !r.image).length;
       const last = claim.submissions[claim.submissions.length - 1];
       let changes = 0;
@@ -248,13 +368,13 @@
           </div>
           <div class="month-total">${money(total) || '$0.00'}${status}</div>
         </div>
-        ${last ? `<div class="month-sub">${claim.status === 'reopened' ? `Reopened · ${plural(changes, 'change')} since ` : ''}submitted ${fmtDay(last.at.slice(0, 10))} to ${escapeHtml(last.to)}${claim.submissions.length > 1 ? ` (resubmission ${claim.submissions.length - 1})` : ''}</div>` : ''}
+        ${last && !searching() ? `<div class="month-sub">${claim.status === 'reopened' ? `Reopened · ${plural(changes, 'change')} since ` : ''}submitted ${fmtDay(last.at.slice(0, 10))} to ${escapeHtml(last.to)}${claim.submissions.length > 1 ? ` (resubmission ${claim.submissions.length - 1})` : ''}</div>` : ''}
         <ul class="receipt-list"></ul>
-        <div class="month-actions">
+        ${searching() ? '' : `<div class="month-actions">
           ${isSubmitted
             ? `<button class="btn ghost" data-act="reopen">Reopen claim</button><button class="btn ghost" data-act="resend">Send copy</button>`
             : `<button class="btn primary" data-act="submit"${recs.length ? '' : ' disabled'}>${claim.status === 'reopened' ? 'Resubmit claim' : 'Submit claim'}</button>`}
-        </div>`;
+        </div>`}`;
       const ul = sec.querySelector('ul');
       for (const r of recs) {
         const url = r.thumb ? URL.createObjectURL(r.thumb) : '';
@@ -263,12 +383,22 @@
         li.className = 'receipt' + (isSubmitted ? ' locked' : '');
         li.dataset.id = r.id;
         const n = (r.attachments || []).length;
+        const ls = linesOf(r);
+        const units = [...new Set(ls.map(l => l.unit).filter(Boolean))];
+        const people = (r.attendees || []).filter(p => p.name).length;
+        const tags = [
+          flags.dup.has(r.id) ? '<span class="tag bad">Possible duplicate</span>' : '',
+          taxInvoiceIssue(r) ? '<span class="tag warn-tag">No tax invoice</span>' : '',
+          needsPeople(r) && !people ? '<span class="tag warn-tag">No attendees</span>' : '',
+          r.recurringFrom || r.recurring ? '<span class="tag">Monthly</span>' : '',
+        ].join('');
         li.innerHTML = `
           ${url ? `<img class="thumb" src="${url}" alt="">` : `<div class="thumb thumb-missing"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z"/><path d="M8 7h8M8 11h8M8 15h5"/></svg><span>To follow</span></div>`}
           <div class="info">
             <div class="desc">${escapeHtml(r.vendor || r.description || '(no vendor)')}</div>
             <div class="purpose">${escapeHtml(r.purpose || '')}</div>
-            <div class="meta">${escapeHtml(fmtDay(r.date))}${r.unit ? ` · <span class="unit-chip">${escapeHtml(r.unit)}</span>` : ' · <span class="warn">No unit</span>'} · ${escapeHtml(r.category || '')}${n ? ` · 📎${n}` : ''}</div>
+            <div class="meta">${escapeHtml(fmtDay(r.date))}${units.length ? units.map(u => ` · <span class="unit-chip">${escapeHtml(u)}</span>`).join('') : ' · <span class="warn">No unit</span>'} · ${escapeHtml(hasSplits(r) ? 'Split: ' + ls.map(l => l.category).join(', ') : (r.category || ''))}${n ? ` · 📎${n}` : ''}${people ? ` · 👥${people}` : ''}</div>
+            ${tags ? `<div class="tags">${tags}</div>` : ''}
           </div>
           <div class="amt">${isForeign(r)
             ? `${audView(r).amount === '' ? '<span class="warn">AUD?</span>' : audView(r).audEstimated ? `<span class="est" title="Estimate from the day's exchange rate">~${money(audView(r).amount)}</span>` : money(audView(r).amount)}<div class="gst-line">${escapeHtml(fxLabel(r))}${audView(r).audEstimated ? ' · est.' : ''}</div>`
@@ -278,7 +408,47 @@
       wrap.appendChild(sec);
     }
     $('emptyState').hidden = shown > 0;
-    $('emptyState').querySelector('p').textContent = filter === 'submitted' ? 'No submitted claims yet.' : 'Nothing waiting to be submitted.';
+    $('emptyState').querySelector('p').textContent = searching() ? 'No receipts match.' : filter === 'submitted' ? 'No submitted claims yet.' : 'Nothing waiting to be submitted.';
+  }
+
+  /* ----- Reminders at the top of the list ----- */
+  let remindersHidden = false;
+  function renderReminders(all, statusOf, flags) {
+    const box = $('reminders');
+    if (remindersHidden || searching()) { box.innerHTML = ''; return; }
+    const cur = todayISO().slice(0, 7);
+    const open = all.filter(r => statusOf(monthOf(r)) !== 'submitted');
+    const items = [];
+    const overdue = [...new Set(open.map(monthOf))].filter(m => m < cur).sort();
+    for (const m of overdue) items.push(`<button class="rem" data-rem="submit" data-month="${m}"><b>⏰ ${monthLabel(m)}</b> hasn’t been submitted yet – submit it</button>`);
+    const toFollow = open.filter(r => !r.image).length;
+    if (toFollow) items.push(`<button class="rem" data-rem="tofollow">📎 ${plural(toFollow, 'receipt')} still to follow</button>`);
+    const taxinv = open.filter(r => taxInvoiceIssue(r)).length;
+    if (taxinv) items.push(`<button class="rem" data-rem="taxinv">⚠ ${taxinv} over $82.50 without a tax invoice</button>`);
+    const people = open.filter(r => needsPeople(r) && !(r.attendees || []).some(p => p.name)).length;
+    if (people) items.push(`<button class="rem" data-rem="people">👥 ${people} meal / travel claim${people === 1 ? '' : 's'} without attendees</button>`);
+    const dups = open.filter(r => flags.dup.has(r.id)).length;
+    if (dups) items.push(`<button class="rem" data-rem="dup">⚠ ${dups} possible duplicate${dups === 1 ? '' : 's'}</button>`);
+    box.innerHTML = items.length ? `<div class="rem-box">${items.join('')}<button class="rem-hide" id="remHide" aria-label="Hide reminders">Hide</button></div>` : '';
+  }
+  $('reminders').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.id === 'remHide') { remindersHidden = true; $('reminders').innerHTML = ''; return; }
+    if (b.dataset.rem === 'submit') return openSubmit(b.dataset.month, { copy: false });
+    search.flag = b.dataset.rem;
+    renderList();
+  });
+
+  /* ----- Search & filters ----- */
+  let searchTimer;
+  $('searchInput').addEventListener('input', e => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { search.text = e.target.value.trim(); renderList(); }, 200); });
+  $('filterUnit').addEventListener('change', e => { search.unit = e.target.value; renderList(); });
+  $('filterCat').addEventListener('change', e => { search.cat = e.target.value; renderList(); });
+  function clearSearch() {
+    Object.assign(search, { text: '', unit: '', cat: '', flag: '' });
+    $('searchInput').value = ''; $('filterUnit').value = ''; $('filterCat').value = '';
+    renderList();
   }
 
   $('monthList').addEventListener('click', async e => {
@@ -295,8 +465,8 @@
     if (li) openEdit(li.dataset.id);
   });
 
-  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
+  document.querySelectorAll('#tabsBar .tab').forEach(tab => tab.addEventListener('click', () => {
+    document.querySelectorAll('#tabsBar .tab').forEach(t => t.classList.toggle('active', t === tab));
     filter = tab.dataset.filter;
     renderList();
   }));
@@ -648,6 +818,16 @@
     setCategory(editing.category || '');
     categoryTouched = !!editing.category;
     setUnit(editing.unit || '');
+    f.abn.value = editing.abn ? fmtAbn(editing.abn) || editing.abn : '';
+    f.taxInvoiceOk.checked = !!editing.taxInvoiceOk;
+    splits = hasSplits(editing) ? editing.splits.map(x => ({ ...x })) : [];
+    people = (editing.attendees || []).map(x => ({ ...x }));
+    f.recurring.checked = !!editing.recurring;
+    $('recurringWrap').hidden = !!editing.recurringFrom;
+    $('recurringNote').hidden = !editing.recurringFrom;
+    $('recurringNote').textContent = editing.recurringFrom ? 'Added automatically from a monthly repeat – stop it in Settings → Monthly repeats.' : '';
+    renderSplits();
+    renderPeople();
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     previewUrl = editing.image ? URL.createObjectURL(editing.image) : '';
     $('editPreview').hidden = !editing.image;
@@ -667,6 +847,9 @@
     const f = $('editForm');
     f.querySelectorAll('input, textarea, select').forEach(el => { el.disabled = editLocked; });
     $('addReceiptBtns').hidden = editLocked;
+    ['splitAdd', 'splitRemove', 'peopleAdd', 'peopleAddMe'].forEach(id => { $(id).hidden = editLocked; });
+    $('splitBtn').hidden = editLocked || splits.length > 0;
+    document.querySelectorAll('#splitRows [data-del], #peopleRows [data-pdel]').forEach(b => { b.hidden = editLocked; });
     ['recropBtn', 'deleteBtn', 'saveBtn', 'gstAutoBtn', 'gstNoneBtn', 'attachAdd'].forEach(id => { $(id).hidden = editLocked || (id === 'deleteBtn' && editing.isNew) || (id === 'recropBtn' && !editing.original); });
     $('ocrAgainBtn').hidden = editLocked || !editing.image;
     $('lockBanner').hidden = !editLocked;
@@ -733,6 +916,8 @@
           : `Use the AUD amount on your bank or card statement${settings.statement ? '' : ' (load one in Reconcile to look it up)'}.`;
       scheduleEstimate();
     }
+    updateTaxInv();
+    if (splits.length) { balanceSplits(); renderSplits(); } else updatePeopleHint();
   }
 
   /* ----- AUD estimate from the day's exchange rate ----- */
@@ -835,8 +1020,8 @@
     const status = $('ocrStatus');
     status.hidden = false; status.className = 'ocr-status';
     {
-      if (r.abn) editing.abn = r.abn;
       const f = $('editForm');
+      if (r.abn && (overwrite || !f.abn.value.trim())) { f.abn.value = r.abn; f.abn.classList.add('filled'); }
       const filled = [];
       const put = (field, value) => {
         if (value == null || value === '') return;
@@ -861,6 +1046,8 @@
       }
       if (r.date && (overwrite || editing.isNew)) { f.date.value = r.date; f.date.classList.add('filled'); }
       if (r.category && (overwrite || !categoryTouched)) { setCategory(r.category); f.category.classList.add('filled'); }
+      applyVendorMemory();
+      renderPeople();
       updateMoney();
       status.classList.add('done');
       $('ocrMsg').textContent = filled.length || r.date
@@ -915,7 +1102,183 @@
     const custom = e.target.value === CUSTOM;
     $('customCategoryWrap').hidden = !custom;
     if (custom) $('customCategory').focus();
+    renderPeople();
   });
+
+  /* ----- Tax invoice box ----- */
+  function updateTaxInv() {
+    const f = $('editForm');
+    const foreign = f.currency.value && f.currency.value !== 'AUD';
+    const total = num(f.amount.value) || 0, gst = num(f.gst.value) || 0;
+    const abnOk = validAbn(f.abn.value);
+    const over = total > TAX_INVOICE_LIMIT;
+    $('taxInvBox').hidden = foreign;
+    const issue = !foreign && over && gst > 0 && !abnOk && !f.taxInvoiceOk.checked;
+    $('taxInvWarn').hidden = !issue;
+    $('taxInvOk').hidden = !(abnOk || f.taxInvoiceOk.checked) || foreign;
+    $('taxInvOk').textContent = abnOk ? `✓ Supplier ABN ${fmtAbn(f.abn.value)}` : '✓ Marked as a valid tax invoice';
+    f.abn.classList.toggle('bad', !!f.abn.value.trim() && !abnOk);
+    $('taxInvBox').classList.toggle('needs', issue);
+  }
+  $('editForm').abn.addEventListener('input', updateTaxInv);
+  $('editForm').abn.addEventListener('blur', e => { if (validAbn(e.target.value)) e.target.value = fmtAbn(e.target.value); else if (e.target.value.trim()) toast('That ABN doesn’t check out – 11 digits, as printed on the receipt.'); });
+  $('editForm').taxInvoiceOk.addEventListener('change', updateTaxInv);
+
+  /* ----- Split editor ----- */
+  let splits = []; // [{ id, category, unit, amount, gst, gstAuto, note, auto }]
+  const splitGst = amt => { const f = $('editForm'); const foreign = f.currency.value !== 'AUD'; return foreign || !(num(f.gst.value) > 0) ? 0 : (num(amt) || 0) / 11; };
+  function balanceSplits() {
+    const total = num($('editForm').amount.value) || 0;
+    if (splits.length && splits[0].auto) {
+      const others = splits.slice(1).reduce((t, x) => t + (num(x.amount) || 0), 0);
+      splits[0].amount = fix2(Math.max(0, total - others));
+    }
+    for (const x of splits) if (x.gstAuto) x.gst = fix2(splitGst(x.amount));
+  }
+  function renderSplits() {
+    const on = splits.length > 0;
+    $('splitEditor').hidden = !on;
+    $('splitBtn').hidden = on || editLocked;
+    $('unitField').hidden = on;
+    $('categoryField').hidden = on;
+    if (on) $('customCategoryWrap').hidden = true;
+    const cats = [...new Set([...CATEGORIES, ...splits.map(x => x.category).filter(Boolean)])];
+    $('splitRows').innerHTML = splits.map((x, i) => `
+      <div class="split-row" data-i="${i}">
+        <select data-k="category" aria-label="Expense type"><option value="">Expense type…</option>${cats.map(c => `<option${c === x.category ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('')}</select>
+        <select data-k="unit" aria-label="Business unit"><option value="">Unit…</option>${UNITS.map(u => `<option${u === x.unit ? ' selected' : ''}>${u}</option>`).join('')}</select>
+        <label class="mini"><span>Amount</span><input data-k="amount" inputmode="decimal" value="${escapeHtml(x.amount || '')}" placeholder="0.00"></label>
+        <label class="mini"><span>${$('editForm').currency.value !== 'AUD' ? 'Tax' : 'GST'}</span><input data-k="gst" inputmode="decimal" value="${escapeHtml(x.gst || '')}" placeholder="0.00"></label>
+        <input data-k="note" class="note" value="${escapeHtml(x.note || '')}" placeholder="Note, e.g. 2 nights">
+        <button type="button" class="split-del" data-del="${i}" aria-label="Remove line"${editLocked ? ' hidden' : ''}>×</button>
+      </div>`).join('');
+    if (editLocked) $('splitRows').querySelectorAll('input, select').forEach(el => { el.disabled = true; });
+    updateSplitRemain();
+    renderPeople();
+  }
+  function updateSplitRemain() {
+    if (!splits.length) return;
+    const f = $('editForm');
+    const total = num(f.amount.value) || 0, gst = num(f.gst.value) || 0;
+    const sum = splits.reduce((t, x) => t + (num(x.amount) || 0), 0);
+    const gsum = splits.reduce((t, x) => t + (num(x.gst) || 0), 0);
+    const left = Math.round((total - sum) * 100) / 100;
+    const gleft = Math.round((gst - gsum) * 100) / 100;
+    $('splitRemain').innerHTML = `Allocated ${money(sum)} of ${money(total)}${left ? ` · <b class="warn">${money(Math.abs(left))} ${left > 0 ? 'left to allocate' : 'too much'}</b>` : ' ✓'}${Math.abs(gleft) >= 0.02 ? ` · <span class="warn">GST lines add to ${money(gsum)}, receipt shows ${money(gst)}</span>` : ''}`;
+  }
+  $('splitBtn').onclick = () => {
+    const f = $('editForm');
+    if (num(f.amount.value) == null) return toast('Enter the bill total first.');
+    const cat = readCategory(), unit = readUnit() || settings.lastUnit || '';
+    splits = [
+      // first line soaks up whatever the other lines don't take; GST follows 1/11 of each line on a GST receipt
+      { id: uid(), category: cat, unit, amount: fix2(num(f.amount.value)), gst: f.gst.value || '0.00', gstAuto: num(f.gst.value) > 0, note: '', auto: true },
+      { id: uid(), category: '', unit, amount: '', gst: '', gstAuto: true, note: '' },
+    ];
+    renderSplits();
+  };
+  $('splitAdd').onclick = () => { splits.push({ id: uid(), category: '', unit: splits[0] ? splits[0].unit : '', amount: '', gst: '', gstAuto: true, note: '' }); renderSplits(); };
+  $('splitRemove').onclick = () => {
+    if (!splits.length) return;
+    setCategory(splits[0].category || ''); setUnit(splits[0].unit || '');
+    splits = [];
+    renderSplits();
+  };
+  $('splitRows').addEventListener('click', e => {
+    const d = e.target.closest('[data-del]');
+    if (!d) return;
+    splits.splice(Number(d.dataset.del), 1);
+    if (splits.length === 1) { $('splitRemove').click(); return; }
+    if (splits[0]) splits[0].auto = splits[0].auto ?? false;
+    balanceSplits(); renderSplits();
+  });
+  $('splitRows').addEventListener('input', e => {
+    const row = e.target.closest('.split-row'); if (!row) return;
+    const i = Number(row.dataset.i), k = e.target.dataset.k, x = splits[i];
+    x[k] = e.target.value;
+    if (k === 'amount') { if (i === 0) x.auto = false; if (x.gstAuto) x.gst = fix2(splitGst(x.amount)); }
+    if (k === 'gst') x.gstAuto = false;
+    if (k === 'amount' || k === 'gst') {
+      balanceSplits();
+      // refresh the other rows' numbers without re-rendering the one being typed in
+      $('splitRows').querySelectorAll('.split-row').forEach((r, j) => {
+        if (j !== i || k !== 'amount') r.querySelector('[data-k=amount]').value = splits[j].amount || '';
+        if (j !== i || k !== 'gst') r.querySelector('[data-k=gst]').value = splits[j].gst || '';
+      });
+      updateSplitRemain();
+    }
+  });
+  $('splitRows').addEventListener('change', e => {
+    const row = e.target.closest('.split-row'); if (!row) return;
+    splits[Number(row.dataset.i)][e.target.dataset.k] = e.target.value;
+    if (e.target.dataset.k === 'category') renderPeople();
+  });
+
+  /* ----- Attendees / employees travelling ----- */
+  let people = []; // [{ name, org, type }]
+  function peopleMode() {
+    const cats = splits.length ? splits.map(x => x.category) : [readCategory()];
+    const meal = cats.some(c => MEAL_CATS.includes(c)), travel = cats.some(c => TRAVEL_CATS.includes(c));
+    return meal && travel ? 'both' : meal ? 'meal' : travel ? 'travel' : '';
+  }
+  function renderPeople() {
+    const mode = peopleMode();
+    $('peopleBox').hidden = !mode && !people.length;
+    $('peopleLabel').textContent = mode === 'travel' ? 'Employees travelling' : mode === 'both' ? 'Attendees / employees travelling' : 'Attendees';
+    $('peopleNames').innerHTML = (settings.people || []).map(n => `<option value="${escapeHtml(n)}">`).join('');
+    $('peopleRows').innerHTML = people.map((p, i) => `
+      <div class="person-row" data-i="${i}">
+        <input data-k="name" list="peopleNames" value="${escapeHtml(p.name || '')}" placeholder="Name">
+        <input data-k="org" value="${escapeHtml(p.org || '')}" placeholder="Company">
+        <select data-k="type">${PERSON_TYPES.map(t => `<option${t === p.type ? ' selected' : ''}>${t}</option>`).join('')}</select>
+        <button type="button" class="split-del" data-pdel="${i}" aria-label="Remove person"${editLocked ? ' hidden' : ''}>×</button>
+      </div>`).join('');
+    if (editLocked) $('peopleRows').querySelectorAll('input, select').forEach(el => { el.disabled = true; });
+    updatePeopleHint();
+  }
+  function updatePeopleHint() {
+    const named = people.filter(p => p.name.trim());
+    const total = num($('editForm').amount.value);
+    const mode = peopleMode();
+    const clients = named.filter(p => p.type === 'Client').length;
+    $('peopleHint').textContent = !named.length
+      ? (mode === 'travel' ? 'Add who travelled.' : mode ? 'Add everyone who attended – accounts need this for FBT.' : '')
+      : mode === 'travel' ? `${plural(named.length, 'person')} travelling`
+      : `${plural(named.length, 'person')}${total ? ` · ${money(total / named.length)} per head` : ''}${clients ? ` · ${plural(clients, 'client')} present` : ' · no clients'}`;
+  }
+  $('peopleAdd').onclick = () => { people.push({ name: '', org: '', type: peopleMode() === 'meal' ? 'Client' : 'Employee' }); renderPeople(); const rows = $('peopleRows').querySelectorAll('[data-k=name]'); rows[rows.length - 1].focus(); };
+  $('peopleAddMe').onclick = () => {
+    const me = settings.name || 'Me';
+    if (people.some(p => p.name === me)) return;
+    people.unshift({ name: me, org: (splits[0] && splits[0].unit) || readUnit() || 'Mentis', type: 'Employee' });
+    renderPeople();
+  };
+  $('peopleRows').addEventListener('input', e => {
+    const row = e.target.closest('.person-row'); if (!row) return;
+    people[Number(row.dataset.i)][e.target.dataset.k] = e.target.value;
+    updatePeopleHint();
+  });
+  $('peopleRows').addEventListener('change', e => {
+    const row = e.target.closest('.person-row'); if (!row) return;
+    people[Number(row.dataset.i)][e.target.dataset.k] = e.target.value;
+    updatePeopleHint();
+  });
+  $('peopleRows').addEventListener('click', e => {
+    const d = e.target.closest('[data-pdel]'); if (!d) return;
+    people.splice(Number(d.dataset.pdel), 1);
+    renderPeople();
+  });
+
+  /** Fill expense type / unit from what was used last time for this vendor (new receipts only). */
+  function applyVendorMemory() {
+    if (!editing || !editing.isNew || splits.length) return;
+    const mem = (settings.vendorMemory || {})[vendorKey($('editForm').vendor.value)];
+    if (!mem) return;
+    if (mem.category && !categoryTouched) { setCategory(mem.category); $('editForm').category.classList.add('filled'); }
+    if (mem.unit) setUnit(mem.unit);
+    renderPeople();
+  }
+  $('editForm').vendor.addEventListener('change', applyVendorMemory);
 
   function captureForm() {
     const f = $('editForm');
@@ -931,7 +1294,13 @@
       currency: f.currency.value || 'AUD',
       audAmount: f.currency.value !== 'AUD' && num(f.audAmount.value) != null ? fix2(num(f.audAmount.value)) : '',
       audSource: f.currency.value !== 'AUD' ? audSource : '',
+      abn: validAbn(f.abn.value) ? fmtAbn(f.abn.value) : f.abn.value.trim(),
+      taxInvoiceOk: f.taxInvoiceOk.checked,
+      attendees: people.filter(p => p.name.trim()).map(p => ({ name: p.name.trim(), org: (p.org || '').trim(), type: p.type || 'Employee' })),
+      recurring: f.recurring.checked && !editing.recurringFrom,
+      splits: splits.length > 1 ? splits.map(x => ({ id: x.id, category: x.category, unit: x.unit, amount: num(x.amount) != null ? fix2(num(x.amount)) : '', gst: num(x.gst) != null ? fix2(num(x.gst)) : '0.00', note: (x.note || '').trim() })) : [],
     });
+    if (editing.splits.length) { editing.category = editing.splits[0].category; editing.unit = editing.splits[0].unit; }
     const est = currentEstimate();
     Object.assign(editing, est
       ? { audEstimate: fix2(est.value), audEstimateRate: est.rate.toFixed(6), audEstimateDate: est.rateDate }
@@ -953,7 +1322,21 @@
     editing.exgst = editing.amount !== '' ? fix2(num(editing.amount) - (num(editing.gst) || 0)) : '';
     if (!editing.vendor) return toast('Add the vendor.');
     if (!editing.image && editing.amount === '') return toast('Add the total – there’s no receipt to read it from yet.');
+    if (editing.splits.length) {
+      const bad = editing.splits.findIndex(x => !x.category || !x.unit || x.amount === '');
+      if (bad >= 0) return toast(`Split line ${bad + 1} needs an expense type, business unit and amount.`);
+      const sum = editing.splits.reduce((t, x) => t + (parseFloat(x.amount) || 0), 0);
+      if (Math.abs(sum - (parseFloat(editing.amount) || 0)) > 0.01) return toast(`The split lines add up to ${money(sum)} but the bill is ${money(editing.amount)}.`, 4500);
+    }
     if (!editing.unit) return toast('Choose the business unit – Mentis or Macrack.');
+    if (validAbn(editing.abn) === false && editing.abn && !confirm(`The ABN ${editing.abn} doesn't pass the ABN check – it may be mistyped. Save anyway?`)) return;
+    // Duplicate check against everything else on the phone.
+    const dups = (await db.all()).filter(o => looksDuplicate(editing, o));
+    if (dups.length) {
+      const d = dups[0];
+      if (!confirm(`This looks like a duplicate of:\n\n${d.vendor} – ${money(audTotal(d))} on ${fmtDay(d.date)}${monthOf(d) !== monthOf(editing) ? ` (${monthLabel(monthOf(d))} claim)` : ''}\n\nSave it anyway? (Choose Cancel to go back and check.)`)) return;
+      editing.notDuplicateOf = [...new Set([...(editing.notDuplicateOf || []), ...dups.map(x => x.id)])];
+    }
     // Saving into a month that has already been submitted reopens that claim.
     const month = monthOf(editing);
     if (await isLocked(month)) {
@@ -970,6 +1353,22 @@
       return toast('Could not save – phone storage may be full.');
     }
     settings.lastUnit = editing.unit;
+    // Remember this vendor's expense type and business unit for next time.
+    if (editing.vendor && !editing.splits.length && editing.category) {
+      settings.vendorMemory = { ...(settings.vendorMemory || {}), [vendorKey(editing.vendor)]: { category: editing.category, unit: editing.unit } };
+    }
+    if (editing.attendees.length) settings.people = [...new Set([...editing.attendees.map(p => p.name), ...(settings.people || [])])].slice(0, 60);
+    // Monthly repeats: the receipt itself is the template.
+    const prevTemplate = (settings.recurring || []).find(t => t.id === editing.id);
+    settings.recurring = (settings.recurring || []).filter(t => t.id !== editing.id);
+    if (editing.recurring) {
+      settings.recurring.push({
+        id: editing.id, vendor: editing.vendor, purpose: editing.purpose, amount: editing.amount, gst: editing.gst, gstMode: editing.gstMode,
+        currency: editing.currency, category: editing.category, unit: editing.unit, attendees: editing.attendees, splits: editing.splits,
+        day: Number((editing.date || todayISO()).slice(8, 10)),
+        lastMonth: prevTemplate && prevTemplate.lastMonth > monthOf(editing) ? prevTemplate.lastMonth : monthOf(editing),
+      });
+    }
     saveSettings();
     toast(editing.isNew ? 'Receipt saved' : 'Changes saved');
     editing = null;
@@ -1059,7 +1458,53 @@
       ul.appendChild(li);
     });
   }
-  $('settingsBtn').onclick = () => { renderSettings(); show('settingsView'); };
+  function renderRecurringList() {
+    const ul = $('recurringList');
+    const list = settings.recurring || [];
+    ul.innerHTML = list.length ? '' : '<li class="muted">None. Tick “Repeats every month” on a receipt to add a draft automatically each month.</li>';
+    list.forEach(t => {
+      const li = document.createElement('li');
+      li.innerHTML = `<span>${escapeHtml(t.vendor)} · ${t.currency && t.currency !== 'AUD' ? escapeHtml(t.currency) + ' ' + (parseFloat(t.amount) || 0).toFixed(2) : money(t.amount)} · day ${t.day}</span><button type="button" data-stop="${t.id}">Stop</button>`;
+      ul.appendChild(li);
+    });
+  }
+  $('recurringList').addEventListener('click', async e => {
+    const id = e.target.dataset.stop;
+    if (!id) return;
+    settings.recurring = (settings.recurring || []).filter(t => t.id !== id);
+    saveSettings();
+    const rec = await db.get(id);
+    if (rec) await db.put({ ...rec, recurring: false });
+    renderRecurringList();
+    toast('Monthly repeat stopped');
+  });
+
+  /** Add this month's drafts for monthly repeats (receipt to follow), catching up any missed months. */
+  async function runRecurring() {
+    const list = settings.recurring || [];
+    if (!list.length) return;
+    const today = todayISO(), cur = today.slice(0, 7), dayNow = Number(today.slice(8, 10));
+    const nextMonth = m => { const [y, mo] = m.split('-').map(Number); return mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, '0')}`; };
+    let made = 0;
+    for (const t of list) {
+      let m = nextMonth(t.lastMonth);
+      while (m <= cur && (m < cur || dayNow >= t.day)) {
+        const [y, mo] = m.split('-').map(Number);
+        const day = Math.min(t.day, new Date(y, mo, 0).getDate());
+        await db.put({
+          id: uid(), created: Date.now(), date: `${m}-${String(day).padStart(2, '0')}`, vendor: t.vendor, purpose: t.purpose,
+          amount: t.amount, gst: t.gst, gstMode: t.gstMode, currency: t.currency || 'AUD', category: t.category, unit: t.unit,
+          attendees: (t.attendees || []).map(p => ({ ...p })), splits: (t.splits || []).map(x => ({ ...x, id: uid() })),
+          attachments: [], image: null, thumb: null, imageVer: 0, recurringFrom: t.id,
+        });
+        t.lastMonth = m; made++;
+        m = nextMonth(m);
+      }
+    }
+    if (made) { saveSettings(); toast(`${plural(made, 'monthly repeat')} added as draft${made === 1 ? '' : 's'} – add the receipt${made === 1 ? '' : 's'} when ${made === 1 ? 'it arrives' : 'they arrive'}.`, 4500); }
+  }
+
+  $('settingsBtn').onclick = () => { renderSettings(); renderRecurringList(); show('settingsView'); };
   $('settingsDone').onclick = () => {
     settings.name = $('settingsForm').name.value.trim();
     saveSettings();
@@ -1123,6 +1568,15 @@
     }
     const estimated = recs.filter(r => isForeign(r) && audView(r).audEstimated);
     if (!copy && estimated.length && !confirm(`${plural(estimated.length, 'overseas receipt')} still ${estimated.length === 1 ? 'uses' : 'use'} an estimated AUD amount (from the day's exchange rate):\n\n${estimated.map(r => `• ${r.vendor} ${fxLabel(r)} ≈ ${money(audTotal(r))}`).join('\n')}\n\nSubmit with the estimates? They're marked as estimates for accounts. When the bank statement arrives, updating them reopens the claim and shows on the exception report.`)) return;
+    const noTaxInv = recs.filter(r => taxInvoiceIssue(r));
+    const noPeople = recs.filter(r => needsPeople(r) && !(r.attendees || []).some(p => p.name));
+    if (!copy && (noTaxInv.length || noPeople.length)) {
+      const lines = [
+        ...noTaxInv.map(r => `• ${r.vendor} ${money(r.amount)} – no tax invoice / ABN (GST may not be claimable)`),
+        ...noPeople.map(r => `• ${r.vendor} ${money(audTotal(r))} – no attendees / employees listed`),
+      ];
+      if (!confirm(`Before you submit – accounts may query these:\n\n${lines.join('\n')}\n\nSubmit anyway? (Cancel to go back and fix them.)`)) return;
+    }
     const toFollow = recs.filter(r => !r.image);
     if (!copy && toFollow.length && !confirm(`${plural(toFollow.length, 'receipt')} in this claim ${toFollow.length === 1 ? 'is' : 'are'} still to follow:\n\n${toFollow.map(r => `• ${r.vendor} ${money(audTotal(r))}`).join('\n')}\n\nSubmit anyway? They'll be marked “Receipt to follow”. Adding the photo later reopens the claim and shows up on the exception report.`)) return;
     const sel = $('sendTo');
@@ -1171,7 +1625,7 @@
 
     $('sendTitle').textContent = copy ? `Send a copy – ${label}` : `${submissionNo > 1 ? 'Resubmit' : 'Submit'} ${label} claim`;
     const unitLines = UNITS.map(u => [u, ordered.filter(r => r.unit === u)]).filter(([, l]) => l.length);
-    $('sendSummary').innerHTML = `${plural(ordered.length, 'receipt')} · <strong>${money(total) || '$0.00'}</strong><br>` +
+    $('sendSummary').innerHTML = `${plural(recs.length, 'receipt')} · <strong>${money(total) || '$0.00'}</strong><br>` +
       unitLines.map(([u, l]) => `${u}: ${money(l.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0))}`).join(' · ');
     const exBox = $('sendExceptions');
     exBox.hidden = submissionNo <= 1;
@@ -1183,7 +1637,7 @@
     try {
       const withBytes = await Promise.all(ordered.map(async r => ({
         ...r,
-        jpeg: r.image ? new Uint8Array(await r.image.arrayBuffer()) : null,
+        jpeg: r.image && !(r.splitIndex > 0) ? new Uint8Array(await r.image.arrayBuffer()) : null, // split lines share one receipt image
         attachments: await Promise.all((r.attachments || []).map(async a => ({ ...a, jpeg: new Uint8Array(await a.blob.arrayBuffer()) }))),
       })));
       const pdf = ExpensePdf.buildClaimReport({
@@ -1236,8 +1690,12 @@
       (r.attachments || []).length, r.image ? 'Yes' : 'To follow',
       isForeign(r) ? r.currency : 'AUD', isForeign(r) ? { v: parseFloat(r.fxAmount) || 0, t: 'money' } : '', isForeign(r) && r.rate ? { v: Math.round(r.rate * 10000) / 10000, t: 'number' } : '',
       isForeign(r) ? (r.audBasis === 'estimate' ? `Estimate – daily rate ${r.audEstimateDate || ''}`.trim() : r.audSource === 'bank' ? 'Bank statement' : 'Entered') : '',
+      r.splitOfRef ? `Split of ${r.splitOfRef} (bill ${money(r.receiptTotal)})` : '',
+      isForeign(r) ? 'n/a – overseas' : (parseFloat(r.receiptTotal) || 0) <= TAX_INVOICE_LIMIT ? 'Not required (≤ $82.50)' : r.taxInvIssue ? 'MISSING' : 'Yes',
+      { v: r.attendeesText || '', t: 'wrap' }, (r.attendees || []).filter(p => p.name).length || '',
+      MEAL_CATS.includes(r.category) && (r.attendees || []).length ? { v: (parseFloat(r.amount) || 0) / r.attendees.length, t: 'money' } : '',
     ]);
-    lines.push(null, ['', '', '', '', { v: 'TOTAL', t: 'bold' }, '', '', '', { v: total - totalGst, t: 'boldMoney' }, { v: totalGst, t: 'boldMoney' }, { v: total, t: 'boldMoney' }, '', '', '', '', '', '']);
+    lines.push(null, ['', '', '', '', { v: 'TOTAL', t: 'bold' }, '', '', '', { v: total - totalGst, t: 'boldMoney' }, { v: totalGst, t: 'boldMoney' }, { v: total, t: 'boldMoney' }, '', '', '', '', '', '', '', '', '', '', '']);
     const sheets = [{
       name: 'Claim lines',
       columns: [
@@ -1246,6 +1704,7 @@
         { header: 'Ex GST', width: 12, type: 'money' }, { header: 'GST', width: 10, type: 'money' }, { header: 'Total', width: 12, type: 'money' },
         { header: 'Supporting docs', width: 15, type: 'number' }, { header: 'Receipt', width: 11 },
         { header: 'Currency', width: 10 }, { header: 'Foreign total', width: 13, type: 'money' }, { header: 'Rate to AUD', width: 12, type: 'number' }, { header: 'AUD from', width: 15 },
+        { header: 'Split', width: 24 }, { header: 'Tax invoice', width: 20 }, { header: 'Attendees / travellers', width: 50 }, { header: 'People', width: 8, type: 'number' }, { header: 'Cost per head', width: 13, type: 'money' },
       ],
       rows: lines,
     }];
@@ -1305,12 +1764,13 @@
 
   function buildClaimCsv(ordered, label) {
     const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const head = ['Ref', 'Claim month', 'Business unit', 'Date', 'Vendor', 'ABN', 'Expense type', 'Purpose', 'Ex GST (AUD)', 'GST (AUD)', 'Total (AUD)', 'Supporting docs', 'Receipt', 'Currency', 'Foreign total', 'Rate to AUD', 'AUD from'];
+    const head = ['Ref', 'Claim month', 'Business unit', 'Date', 'Vendor', 'ABN', 'Expense type', 'Purpose', 'Ex GST (AUD)', 'GST (AUD)', 'Total (AUD)', 'Supporting docs', 'Receipt', 'Currency', 'Foreign total', 'Rate to AUD', 'AUD from', 'Split', 'Tax invoice', 'Attendees / travellers'];
     const rows = ordered.map(r => [r.ref, label, r.unit || '', r.date ? r.date.split('-').reverse().join('/') : '', r.vendor || '', r.abn || '', r.category || '', r.purpose || '',
       ((parseFloat(r.amount) || 0) - (parseFloat(r.gst) || 0)).toFixed(2), (parseFloat(r.gst) || 0).toFixed(2), (parseFloat(r.amount) || 0).toFixed(2),
       (r.attachments || []).length, r.image ? 'Yes' : 'To follow',
       isForeign(r) ? r.currency : 'AUD', isForeign(r) ? (parseFloat(r.fxAmount) || 0).toFixed(2) : '', isForeign(r) && r.rate ? r.rate.toFixed(4) : '',
-      isForeign(r) ? (r.audBasis === 'estimate' ? 'Estimate (daily rate)' : r.audSource === 'bank' ? 'Bank statement' : 'Entered') : '']);
+      isForeign(r) ? (r.audBasis === 'estimate' ? 'Estimate (daily rate)' : r.audSource === 'bank' ? 'Bank statement' : 'Entered') : '',
+      r.splitOfRef ? `Split of ${r.splitOfRef}` : '', isForeign(r) ? 'n/a' : (parseFloat(r.receiptTotal) || 0) <= TAX_INVOICE_LIMIT ? 'Not required' : r.taxInvIssue ? 'MISSING' : 'Yes', r.attendeesText || '']);
     return '\uFEFF' + [head, ...rows].map(r => r.map(q).join(',')).join('\r\n');
   }
 
@@ -1379,6 +1839,84 @@
     toast(`${monthLabel(p.month)} claim submitted – receipts locked`);
     renderList();
   }
+
+  /* ---------------- Spending dashboard ---------------- */
+  let dashPeriod = 'fy';
+  function periodRange(p) {
+    const t = todayISO(), [y, m] = t.split('-').map(Number);
+    const ym = (yy, mm) => `${yy}-${String(mm).padStart(2, '0')}`;
+    const add = (yy, mm, n) => { const d = new Date(yy, mm - 1 + n, 1); return [d.getFullYear(), d.getMonth() + 1]; };
+    if (p === 'month') return { from: ym(y, m), to: ym(y, m), label: monthLabel(ym(y, m)) };
+    if (p === 'last') { const [a, b] = add(y, m, -1); return { from: ym(a, b), to: ym(a, b), label: monthLabel(ym(a, b)) }; }
+    if (p === 'fy') { const fyStart = m >= 7 ? y : y - 1; return { from: ym(fyStart, 7), to: ym(fyStart + 1, 6), label: `Financial year ${fyStart}–${String(fyStart + 1).slice(2)}` }; }
+    const [a, b] = add(y, m, -11); return { from: ym(a, b), to: ym(y, m), label: 'Last 12 months' };
+  }
+  function monthsBetween(from, to) {
+    const out = []; let [y, m] = from.split('-').map(Number);
+    while (`${y}-${String(m).padStart(2, '0')}` <= to) { out.push(`${y}-${String(m).padStart(2, '0')}`); m++; if (m > 12) { m = 1; y++; } }
+    return out;
+  }
+  async function renderDash() {
+    const { from, to, label } = periodRange(dashPeriod);
+    const recs = (await db.all()).filter(r => { const mo = monthOf(r); return mo >= from && mo <= to; });
+    const lines = recs.flatMap(linesOf).filter(l => l.amount !== '');
+    const total = lines.reduce((s, l) => s + (parseFloat(l.amount) || 0), 0);
+    const gst = lines.reduce((s, l) => s + (parseFloat(l.gst) || 0), 0);
+    const group = (key, none = 'Not set') => {
+      const m = new Map();
+      for (const l of lines) { const k = key(l) || none; m.set(k, (m.get(k) || 0) + (parseFloat(l.amount) || 0)); }
+      return [...m.entries()].sort((a, b) => b[1] - a[1]);
+    };
+    const bars = (rows, title) => {
+      const max = Math.max(...rows.map(r => r[1]), 1);
+      return `<section class="dash-card"><h3>${title}</h3>${rows.length ? rows.map(([k, v]) => `
+        <div class="hbar" title="${escapeHtml(k)}: ${money(v)} (${Math.round(v / (total || 1) * 100)}%)">
+          <span class="hbar-label">${escapeHtml(k)}</span>
+          <span class="hbar-track"><span class="hbar-fill" style="width:${Math.max(1.5, v / max * 100)}%"></span></span>
+          <span class="hbar-val">${money(v)}</span>
+        </div>`).join('') : '<p class="muted small">Nothing yet.</p>'}</section>`;
+    };
+    const byType = group(l => l.category, 'No expense type'), byUnit = group(l => l.unit, 'No business unit');
+    const vendors = group(l => l.vendor).slice(0, 5);
+    const months = monthsBetween(from, to);
+    const perMonth = months.map(mo => [mo, lines.filter(l => monthOf(l) === mo).reduce((s, l) => s + (parseFloat(l.amount) || 0), 0)]);
+    const maxM = Math.max(...perMonth.map(x => x[1]), 1);
+    const peak = perMonth.reduce((a, b) => (b[1] > a[1] ? b : a), ['', 0]);
+    const est = recs.filter(r => isForeign(r) && audView(r).audEstimated).length;
+    const cols = months.length > 1 ? `<section class="dash-card"><h3>By month</h3>
+      <div class="cols" role="img" aria-label="Spend by month">${perMonth.map(([mo, v]) => `
+        <button type="button" class="col" data-tip="${escapeHtml(monthLabel(mo))}: ${money(v)}" title="${escapeHtml(monthLabel(mo))}: ${money(v)}">
+          <span class="col-val">${mo === peak[0] && v ? money(v).replace(/\.\d\d$/, '') : ''}</span>
+          <span class="col-bar" style="height:${v ? Math.max(3, v / maxM * 100) : 0}%"></span>
+          <span class="col-label">${new Date(mo + '-01T00:00').toLocaleDateString('en-AU', { month: 'short' }).slice(0, 3)}</span>
+        </button>`).join('')}</div>
+      <p class="muted small" id="colTip">Tap a month for its total.</p>
+      <details class="dash-table"><summary>Show as table</summary><table>${perMonth.map(([mo, v]) => `<tr><td>${monthLabel(mo)}</td><td>${money(v)}</td></tr>`).join('')}</table></details></section>` : '';
+    $('dashBody').innerHTML = `
+      <p class="dash-period">${escapeHtml(label)}${est ? ` · <span class="est">includes ${est} estimated AUD amount${est === 1 ? '' : 's'}</span>` : ''}</p>
+      <div class="tiles">
+        <div class="tile"><span>Total spend</span><b>${money(total) || '$0.00'}</b></div>
+        <div class="tile"><span>GST</span><b>${money(gst) || '$0.00'}</b></div>
+        <div class="tile"><span>Receipts</span><b>${recs.length}</b></div>
+      </div>
+      ${cols}
+      ${bars(byType, 'By expense type')}
+      ${bars(byUnit, 'By business unit')}
+      ${bars(vendors, 'Top vendors')}`;
+  }
+  $('dashBtn').onclick = () => { show('dashView'); renderDash(); };
+  $('dashDone').onclick = () => { show('listView'); renderList(); };
+  $('dashPeriods').addEventListener('click', e => {
+    const b = e.target.closest('[data-period]'); if (!b) return;
+    dashPeriod = b.dataset.period;
+    document.querySelectorAll('#dashPeriods .tab').forEach(t => t.classList.toggle('active', t === b));
+    renderDash();
+  });
+  $('dashBody').addEventListener('click', e => {
+    const c = e.target.closest('.col'); if (!c) return;
+    document.querySelectorAll('.col').forEach(x => x.classList.toggle('on', x === c));
+    $('colTip').textContent = c.dataset.tip;
+  });
 
   /* ---------------- Bank statement reconciliation ---------------- */
   let reconData = null; // { name, from, to, note, transactions, result }
@@ -1531,7 +2069,7 @@
   }
 
   applyBrand();
-  migrate().catch(console.error).then(renderList).then(handleShared);
+  migrate().catch(console.error).then(() => runRecurring().catch(console.error)).then(renderList).then(handleShared);
   $('appVersion').textContent = `App version ${APP_VERSION}`;
   // Pick up new versions straight away: never use a cached sw.js, check on every open,
   // and reload once when a new version takes over (only while on the claims list).

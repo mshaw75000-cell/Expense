@@ -29,6 +29,21 @@ The submit screen has a **Send with** choice (remembered for next time):
 - **My default email app** – opens your default email app with the message filled in; the files are saved for you to attach.
 - **Just save the files** – saves the PDF and spreadsheet to your phone.
 
+## Checks and extra details
+
+- **Tax invoice warning** – an Australian receipt over **$82.50** with GST needs a tax invoice showing the supplier's **ABN** for the business to claim the GST. The receipt screen has a **Supplier ABN** box (filled automatically when the reader finds one, checked with the official ABN check-digit rule) and a **This is a valid tax invoice** tick. Receipts without either are tagged *No tax invoice*, listed before you submit, and marked in the PDF and the spreadsheet's *Tax invoice* column.
+- **Attendees / employees travelling** – for *Meals & Entertainment* the receipt asks who attended (name, company, Employee/Client/Supplier/Other; **+ Me** adds you) and shows cost per head and whether a client was present; for *Travel – Air*, *Travel – Ground* and *Lodging* it asks who travelled. Names are remembered. People appear in the PDF and spreadsheet; claims without them are flagged.
+- **Split a bill** – **Split this bill** turns one receipt (e.g. a hotel bill) into lines, each with its own expense type, business unit, amount and GST (GST follows 1/11 of each line unless you change it). The first line balances automatically; the lines must add up to the bill. Reports show R1a, R1b… with the receipt image once.
+- **Duplicate check** – saving a receipt with the same amount, a date within a day, and the same vendor as another asks before saving; possible duplicates are tagged in the list.
+
+## Finding things and staying on top
+
+- **Search and filters** – search by vendor, purpose, amount, people, ABN or date, and filter by business unit or expense type, across all months.
+- **Remembers each vendor** – the expense type and business unit used last time for a vendor are filled in next time.
+- **Reminders** – the top of the list shows unsubmitted past months, receipts still to follow, missing tax invoices, meals/travel without attendees and possible duplicates; tap one to jump to them.
+- **Monthly repeats** – tick **Repeats every month** on a receipt (phone, software subscriptions…) and a draft (receipt to follow) is added each month on the same day. Stop it under Settings → Monthly repeats.
+- **Spending dashboard** – the chart icon at the top: total, GST and receipt count for this month, last month, this financial year (July–June) or 12 months, with spend by month, expense type, business unit and top vendors.
+
 ## Foreign currency
 
 Each receipt has a **Currency** (AUD by default; the reader picks up US$, NZ$, €, £ and others from the receipt). For any other currency:

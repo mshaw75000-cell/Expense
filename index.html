@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=13">
+  <link rel="stylesheet" href="styles.css?v=14">
 </head>
 <body>
   <header class="topbar">
@@ -21,6 +21,9 @@
       <span id="brandWord" class="wordmark">mentis</span>
     </div>
     <div class="topbar-title" id="viewTitle">Claims</div>
+    <button class="icon-btn" id="dashBtn" aria-label="Spending dashboard" title="Dashboard">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+    </button>
     <button class="icon-btn" id="reconBtn" aria-label="Reconcile bank statement" title="Reconcile">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h18M5 10V20M19 10V20M9 10v10M15 10v10M2 20h20M12 3l9 5H3z"/></svg>
     </button>
@@ -31,7 +34,16 @@
 
   <!-- ===== List view ===== -->
   <main id="listView" class="view">
-    <div class="tabs" role="tablist">
+    <div class="reminders" id="reminders"></div>
+    <div class="search-bar">
+      <input type="search" id="searchInput" placeholder="Search vendor, purpose, amount, people…" aria-label="Search receipts">
+      <div class="filter-row">
+        <select id="filterUnit" aria-label="Business unit"><option value="">All units</option><option>Mentis</option><option>Macrack</option></select>
+        <select id="filterCat" aria-label="Expense type"><option value="">All expense types</option><option>Meals &amp; Entertainment</option><option>Staff Amenities</option><option>Parking</option><option>Fuel</option><option>Fuel / Mileage</option><option>Travel – Air</option><option>Travel – Ground</option><option>Lodging</option><option>Office Supplies</option><option>Software / Subscriptions</option><option>Other</option></select>
+      </div>
+    </div>
+    <div class="search-note" id="searchNote" hidden></div>
+    <div class="tabs" role="tablist" id="tabsBar">
       <button class="tab active" data-filter="open">To submit</button>
       <button class="tab" data-filter="submitted">Submitted</button>
     </div>
@@ -154,7 +166,26 @@
         <div class="fx-cands" id="fxCands"></div>
       </div>
 
-      <fieldset class="field">
+      <div class="taxinv" id="taxInvBox" hidden>
+        <p class="taxinv-warn" id="taxInvWarn" hidden>⚠ Over $82.50 – the business needs a <strong>tax invoice</strong> showing the supplier's ABN to claim the GST. Ask the supplier for one, or enter the ABN if it's on the receipt.</p>
+        <p class="taxinv-ok" id="taxInvOk" hidden></p>
+        <div class="row nowrap">
+          <label class="field grow"><span>Supplier ABN</span><input name="abn" inputmode="numeric" placeholder="11 digits" maxlength="14"></label>
+        </div>
+        <label class="check"><input type="checkbox" name="taxInvoiceOk"> This is a valid tax invoice</label>
+      </div>
+
+      <div class="split-box">
+        <button type="button" class="btn small ghost" id="splitBtn">Split this bill (e.g. room, meals, parking)</button>
+        <div id="splitEditor" hidden>
+          <div class="split-head"><strong>Split across expense types</strong><button type="button" class="btn small ghost danger" id="splitRemove">Remove split</button></div>
+          <div id="splitRows"></div>
+          <button type="button" class="btn small ghost" id="splitAdd">+ Add line</button>
+          <p class="split-remain" id="splitRemain"></p>
+        </div>
+      </div>
+
+      <fieldset class="field" id="unitField">
         <span>Business unit</span>
         <div class="segmented" id="unitPicker">
           <label><input type="radio" name="unit" value="Mentis"><span>Mentis</span></label>
@@ -165,7 +196,7 @@
         <span>Date</span>
         <input name="date" type="date">
       </label>
-      <label class="field">
+      <label class="field" id="categoryField">
         <span>Expense type</span>
         <select name="category" id="categorySelect">
           <option value="">Choose expense type…</option>
@@ -187,6 +218,16 @@
         <span>Expense type (type it in)</span>
         <input name="customCategory" id="customCategory" placeholder="e.g. Conference fees, Tolls, Gifts" maxlength="40">
       </label>
+      <div class="field people" id="peopleBox" hidden>
+        <span id="peopleLabel">Attendees</span>
+        <div id="peopleRows"></div>
+        <div class="row">
+          <button type="button" class="btn small ghost" id="peopleAddMe">+ Me</button>
+          <button type="button" class="btn small ghost" id="peopleAdd">+ Person</button>
+        </div>
+        <p class="muted small" id="peopleHint"></p>
+        <datalist id="peopleNames"></datalist>
+      </div>
       <div class="field">
         <span>Supporting photos <em class="muted small" id="attachCount"></em></span>
         <div class="attach-grid" id="attachGrid"></div>
@@ -197,6 +238,8 @@
         </label>
         <p class="muted small">e.g. invoice, booking confirmation, attendee list, parking ticket.</p>
       </div>
+      <label class="check" id="recurringWrap"><input type="checkbox" name="recurring"> Repeats every month – add a draft each month</label>
+      <p class="muted small" id="recurringNote" hidden></p>
       <div class="bottom-bar">
         <button type="button" class="btn ghost danger" id="deleteBtn" hidden>Delete</button>
         <button type="button" class="btn ghost" id="editCancel">Cancel</button>
@@ -243,6 +286,9 @@
         </label>
       </div>
 
+      <h3>Monthly repeats</h3>
+      <ul class="chips" id="recurringList"></ul>
+
       <h3>Data</h3>
       <p class="muted">Receipts are stored only on this phone, inside this browser.</p>
       <div class="row">
@@ -254,6 +300,20 @@
         <button type="button" class="btn primary" id="settingsDone">Done</button>
       </div>
     </form>
+  </section>
+
+  <!-- ===== Dashboard view ===== -->
+  <section id="dashView" class="view" hidden>
+    <div class="tabs dash-periods" role="tablist" id="dashPeriods">
+      <button class="tab" data-period="month">This month</button>
+      <button class="tab" data-period="last">Last month</button>
+      <button class="tab active" data-period="fy">This FY</button>
+      <button class="tab" data-period="12m">12 months</button>
+    </div>
+    <div id="dashBody"></div>
+    <div class="bottom-bar">
+      <button type="button" class="btn primary" id="dashDone">Back</button>
+    </div>
   </section>
 
   <!-- ===== Reconcile view ===== -->
@@ -357,12 +417,12 @@
   <div class="toast" id="toast" hidden></div>
   <div class="busy" id="busy" hidden><div class="spinner"></div></div>
 
-  <script src="ocr.js?v=13"></script>
-  <script src="pdf.js?v=13"></script>
-  <script src="xlsx.js?v=13"></script>
-  <script src="recon.js?v=13"></script>
-  <script src="crop.js?v=13"></script>
-  <script src="docimport.js?v=13"></script>
-  <script src="app.js?v=13"></script>
+  <script src="ocr.js?v=14"></script>
+  <script src="pdf.js?v=14"></script>
+  <script src="xlsx.js?v=14"></script>
+  <script src="recon.js?v=14"></script>
+  <script src="crop.js?v=14"></script>
+  <script src="docimport.js?v=14"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>

@@ -142,7 +142,8 @@
       for (const r of list) {
         const descW = cols.ex - cols.desc - 60;
         const fx = r.currency && r.currency !== 'AUD' ? `${r.currency} ${(parseFloat(r.fxAmount) || 0).toFixed(2)}${r.rate ? ` @ ${r.rate.toFixed(4)}` : ''}${r.audEstimated ? ' (AUD ESTIMATED)' : ''}` : '';
-        const sub = [fx, r.category, r.purpose].filter(Boolean).join(' · ');
+        const flags = [r.splitOfRef ? `Split of ${r.splitOfRef}` : '', r.taxInvIssue ? 'NO TAX INVOICE' : '', r.attendeesText ? `${(r.attendees || []).filter(p => p.name).length} attendee(s)` : ''].filter(Boolean).join(' · ');
+        const sub = [fx, r.category, r.purpose, flags].filter(Boolean).join(' · ');
         const subLines = sub ? wrap(sub, 9, descW).slice(0, 3) : [];
         const rowH = 16 + subLines.length * 11 + 8;
         if (y + rowH > PAGE_H - 90) { newPage(); tableHead(); }
@@ -239,17 +240,19 @@
       pg.image(img, M + (boxW - iw) / 2, yy, iw, ih);
     };
     receipts.forEach(r => {
+      if (r.splitIndex > 0) return; // a split bill's receipt page is shown once, on its first line
       imagePage(`${r.ref} · ${r.unit || ''}`, (pg, yy) => {
-        const amt = money(r.amount);
+        const amt = money(r.receiptTotal ?? r.amount);
         const amtW = amt ? textWidth(amt, 16, true) + 12 : 0;
         for (const l of wrap(r.vendor || '(no vendor)', 16, PAGE_W - 2 * M - amtW, true).slice(0, 2)) {
           pg.text(l, M, yy, { size: 16, bold: true, color: ink }); yy += 19;
         }
         if (amt) {
           pg.text(amt, PAGE_W - M, 98, { size: 16, bold: true, color: accent, align: 'right' });
-          pg.text(`GST ${hasGst(r) ? money(r.gst) : '$0.00'}  ·  Ex GST ${money(exOf(r))}`, PAGE_W - M, 113, { size: 9, color: muted, align: 'right' });
+          const rg = r.receiptGst ?? r.gst, rt = r.receiptTotal ?? r.amount;
+          pg.text(`GST ${rg !== '' && rg != null ? money(rg) : '$0.00'}  ·  Ex GST ${money((parseFloat(rt) || 0) - (parseFloat(rg) || 0))}`, PAGE_W - M, 113, { size: 9, color: muted, align: 'right' });
         }
-        pg.text([fmtDate(r.date), r.unit, r.category, r.abn ? 'ABN ' + r.abn : ''].filter(Boolean).join('  ·  '), M, yy, { size: 10, color: muted }); yy += 18;
+        pg.text([fmtDate(r.date), ...(r.splitSummary ? ['Split bill'] : [r.unit, r.category])].filter(Boolean).join('  ·  '), M, yy, { size: 10, color: muted }); yy += 18;
         if (r.currency && r.currency !== 'AUD') {
           pg.text(`Paid in ${r.currency}: ${r.currency} ${(parseFloat(r.fxAmount) || 0).toFixed(2)}  =  AUD ${money(r.amount).replace('$', '$')}${r.rate ? `  (rate ${r.rate.toFixed(4)})` : ''}  ·  AUD ${r.audEstimated ? `ESTIMATED from the daily rate${r.audEstimateDate ? ' for ' + fmtDate(r.audEstimateDate) : ''}` : r.audSource === 'bank' ? 'from bank statement' : 'entered by claimant'}`, M, yy, { size: 10, bold: true, color: primary }); yy += 16;
         }
@@ -259,6 +262,19 @@
           lines.forEach((l, k) => pg.text(l, M + 52, yy + k * 13, { size: 10, color: ink }));
           yy += lines.length * 13 + 4;
         }
+        if (r.splitSummary) {
+          pg.text('Split:', M, yy, { size: 10, bold: true, color: primary });
+          r.splitSummary.forEach((x, k) => pg.text(`${x.ref}  ${x.category || ''}  ·  ${x.unit || ''}  ·  ${money(x.amount)}`, M + 52, yy + k * 13, { size: 10, color: ink }));
+          yy += r.splitSummary.length * 13 + 4;
+        }
+        if (r.attendeesText) {
+          pg.text('People:', M, yy, { size: 10, bold: true, color: primary });
+          const lines = wrap(r.attendeesText, 10, PAGE_W - 2 * M - 52).slice(0, 4);
+          lines.forEach((l, k) => pg.text(l, M + 52, yy + k * 13, { size: 10, color: ink }));
+          yy += lines.length * 13 + 4;
+        }
+        if (r.taxInvIssue) { pg.text('NO TAX INVOICE / SUPPLIER ABN – GST may not be claimable', M, yy, { size: 10, bold: true, color: warn }); yy += 15; }
+        else if (r.abn) { pg.text(`Supplier ABN ${r.abn}`, M, yy, { size: 9, color: muted }); yy += 13; }
         if (r.attachments && r.attachments.length) {
           pg.text(`${r.attachments.length} supporting document${r.attachments.length === 1 ? '' : 's'} on the following page${r.attachments.length === 1 ? '' : 's'}`, M, yy, { size: 9, color: muted }); yy += 14;
         }
