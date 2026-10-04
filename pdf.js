@@ -141,7 +141,7 @@
       y += 16;
       for (const r of list) {
         const descW = cols.ex - cols.desc - 60;
-        const fx = r.currency && r.currency !== 'AUD' ? `${r.currency} ${(parseFloat(r.fxAmount) || 0).toFixed(2)}${r.rate ? ` @ ${r.rate.toFixed(4)}` : ''}` : '';
+        const fx = r.currency && r.currency !== 'AUD' ? `${r.currency} ${(parseFloat(r.fxAmount) || 0).toFixed(2)}${r.rate ? ` @ ${r.rate.toFixed(4)}` : ''}${r.audEstimated ? ' (AUD ESTIMATED)' : ''}` : '';
         const sub = [fx, r.category, r.purpose].filter(Boolean).join(' · ');
         const subLines = sub ? wrap(sub, 9, descW).slice(0, 3) : [];
         const rowH = 16 + subLines.length * 11 + 8;
@@ -251,7 +251,7 @@
         }
         pg.text([fmtDate(r.date), r.unit, r.category, r.abn ? 'ABN ' + r.abn : ''].filter(Boolean).join('  ·  '), M, yy, { size: 10, color: muted }); yy += 18;
         if (r.currency && r.currency !== 'AUD') {
-          pg.text(`Paid in ${r.currency}: ${r.currency} ${(parseFloat(r.fxAmount) || 0).toFixed(2)}  =  AUD ${money(r.amount).replace('$', '$')}${r.rate ? `  (rate ${r.rate.toFixed(4)})` : ''}  ·  AUD ${r.audSource === 'bank' ? 'from bank statement' : 'entered by claimant'}`, M, yy, { size: 10, bold: true, color: primary }); yy += 16;
+          pg.text(`Paid in ${r.currency}: ${r.currency} ${(parseFloat(r.fxAmount) || 0).toFixed(2)}  =  AUD ${money(r.amount).replace('$', '$')}${r.rate ? `  (rate ${r.rate.toFixed(4)})` : ''}  ·  AUD ${r.audEstimated ? `ESTIMATED from the daily rate${r.audEstimateDate ? ' for ' + fmtDate(r.audEstimateDate) : ''}` : r.audSource === 'bank' ? 'from bank statement' : 'entered by claimant'}`, M, yy, { size: 10, bold: true, color: primary }); yy += 16;
         }
         if (r.purpose) {
           pg.text('Purpose:', M, yy, { size: 10, bold: true, color: primary });

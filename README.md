@@ -37,8 +37,9 @@ Each receipt has a **Currency** (AUD by default; the reader picks up US$, NZ$, �
 - A second box, **Amount in AUD**, appears for what your card was actually charged. Fill it by:
   - **Find on bank statement** – lists charges from the loaded statement within a week of the receipt date, best match first (vendor name, or the foreign amount shown in the bank text such as "USD 23.50"); tap the right one; or
   - typing it in.
+- Until then the box shows an **estimate** – the foreign total at that day's exchange rate (daily rates via jsDelivr's currency-api, with the European Central Bank rate as a fallback) – greyed and in italics, also shown as "~$68.94 · est." in the list. It's replaced only when the statement amount is picked or an amount is typed. A month can be submitted with estimates (you'll be asked to confirm); they're marked **AUD ESTIMATED** in the PDF and "Estimate" in the spreadsheet, and replacing one later shows on the exception report (e.g. "AUD amount basis: estimate → bank").
 - **Reconcile** also spots overseas receipts without an AUD amount and offers **Use $X AUD** from the matching charge.
-- A month can't be submitted until every foreign receipt has its AUD amount. Claim totals, the PDF and the spreadsheet use AUD; the PDF and spreadsheet also show the foreign amount, the rate and whether the AUD came from the bank statement or was entered.
+- A month can't be submitted while a foreign receipt has no AUD amount at all (not even an estimate, e.g. if it was entered offline). Claim totals, the PDF and the spreadsheet use AUD; the PDF and spreadsheet also show the foreign amount, the rate and whether the AUD came from the bank statement or was entered.
 
 ## Locking, reopening and exception reports
 

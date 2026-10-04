@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '12';
+  const APP_VERSION = '13';
   const UNITS = ['Mentis', 'Macrack'];
 
   /* ---------------- Storage ---------------- */
@@ -93,11 +93,11 @@
   // What accounts sees as a change: these fields, compared with the last submission.
   const TRACKED = [
     ['date', 'Date'], ['vendor', 'Vendor'], ['purpose', 'Purpose'], ['unit', 'Business unit'], ['category', 'Expense type'],
-    ['amount', 'Total (AUD)'], ['gst', 'GST'], ['currency', 'Currency'], ['fxAmount', 'Foreign amount'], ['hasReceipt', 'Receipt'], ['attachCount', 'Supporting documents'], ['imageVer', 'Receipt image'],
+    ['amount', 'Total (AUD)'], ['gst', 'GST'], ['currency', 'Currency'], ['fxAmount', 'Foreign amount'], ['audBasis', 'AUD amount basis'], ['hasReceipt', 'Receipt'], ['attachCount', 'Supporting documents'], ['imageVer', 'Receipt image'],
   ];
   const snapshotOf = (r, ref) => ({
     id: r.id, ref, date: r.date || '', vendor: r.vendor || '', purpose: r.purpose || '', unit: r.unit || '', category: r.category || '',
-    amount: r.amount || '', gst: r.gst || '', currency: r.currency || 'AUD', fxAmount: r.fxAmount || '', hasReceipt: !!r.image, attachCount: (r.attachments || []).length, imageVer: r.imageVer || 0,
+    amount: r.amount || '', gst: r.gst || '', currency: r.currency || 'AUD', fxAmount: r.fxAmount || '', audBasis: r.audBasis || '', hasReceipt: !!r.image, attachCount: (r.attachments || []).length, imageVer: r.imageVer || 0,
   });
   const showVal = (k, v) => (k === 'amount' || k === 'gst') ? (v === '' ? '(blank)' : money(v)) : k === 'imageVer' ? 'version ' + (v + 1) : k === 'date' ? fmtDay(v) : (v === '' ? '(blank)' : String(v));
 
@@ -129,13 +129,56 @@
      was actually charged is in audAmount (from the bank statement or typed in). Everything that adds up
      money – claim totals, PDF, spreadsheet, reconciliation – works from the AUD view below. */
   const isForeign = r => !!r.currency && r.currency !== 'AUD';
-  function audView(r) {
+  // audAmount is the real figure (bank statement / typed). Until it exists, audEstimate – from the
+  // day's exchange rate – stands in, shown greyed and marked as an estimate.
+  const hasActualAud = r => r.audAmount !== '' && r.audAmount != null;
+  function audView(r, { actualOnly = false } = {}) {
     if (!isForeign(r)) return r;
-    const aud = r.audAmount === '' || r.audAmount == null ? '' : String(r.audAmount);
+    const estimated = !hasActualAud(r) && !actualOnly && r.audEstimate !== '' && r.audEstimate != null;
+    const aud = hasActualAud(r) ? String(r.audAmount) : estimated ? String(r.audEstimate) : '';
     const fx = parseFloat(r.amount);
     const rate = aud !== '' && fx ? parseFloat(aud) / fx : null;
     const gst = aud === '' ? '' : ((parseFloat(r.gst) || 0) && rate ? (Math.round(parseFloat(r.gst) * rate * 100) / 100).toFixed(2) : '0.00');
-    return { ...r, fxAmount: r.amount, fxGst: r.gst, amount: aud, gst, rate };
+    return { ...r, fxAmount: r.amount, fxGst: r.gst, amount: aud, gst, rate, audEstimated: estimated, audBasis: hasActualAud(r) ? (r.audSource === 'bank' ? 'bank' : 'entered') : estimated ? 'estimate' : '' };
+  }
+
+  /** Daily exchange rate to AUD for a currency on a date (cached). Returns { rate, date } or null. */
+  const FX_CACHE_KEY = 'mentis-fx-cache';
+  async function fxRate(cur, date) {
+    if (!cur || cur === 'AUD' || !date) return null;
+    let cache = {};
+    try { cache = JSON.parse(localStorage.getItem(FX_CACHE_KEY) || '{}'); } catch { /* ignore */ }
+    const key = `${cur}|${date}`;
+    if (cache[key]) return cache[key];
+    const c = cur.toLowerCase();
+    const [y, m, d] = date.split('-').map(Number);
+    const future = date > todayISO();
+    const tag = future ? 'latest' : `${y}.${m}.${d}`;
+    const sources = [
+      async () => { // daily rates published on jsDelivr (covers every currency in the app)
+        const j = await (await fetch(`https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${tag}/v1/currencies/${c}.min.json`)).json();
+        return { rate: j[c].aud, date: j.date };
+      },
+      async () => { // same data, mirror
+        const j = await (await fetch(`https://${future ? 'latest' : date}.currency-api.pages.dev/v1/currencies/${c}.min.json`)).json();
+        return { rate: j[c].aud, date: j.date };
+      },
+      async () => { // European Central Bank reference rates
+        const j = await (await fetch(`https://api.frankfurter.app/${future ? 'latest' : date}?from=${cur}&to=AUD`)).json();
+        return { rate: j.rates.AUD, date: j.date };
+      },
+    ];
+    for (const src of sources) {
+      try {
+        const r = await src();
+        if (r && r.date) { const [a, b, c2] = String(r.date).split(/[-.]/).map(Number); r.date = a && b && c2 ? `${a}-${String(b).padStart(2, '0')}-${String(c2).padStart(2, '0')}` : date; }
+        if (r && r.rate > 0) {
+          if (!future) { cache[key] = r; const keys = Object.keys(cache); if (keys.length > 300) delete cache[keys[0]]; try { localStorage.setItem(FX_CACHE_KEY, JSON.stringify(cache)); } catch { /* full */ } }
+          return r;
+        }
+      } catch { /* try the next source */ }
+    }
+    return null;
   }
   const audTotal = r => parseFloat(audView(r).amount) || 0;
   const fxLabel = r => isForeign(r) ? `${r.currency} ${(parseFloat(r.fxAmount ?? r.amount) || 0).toFixed(2)}` : '';
@@ -185,6 +228,7 @@
       const total = recs.reduce((s, r) => s + audTotal(r), 0);
       const byUnit = UNITS.map(u => [u, recs.filter(r => r.unit === u).reduce((s, r) => s + audTotal(r), 0)]).filter(([, v]) => v);
       const needAud = recs.filter(r => isForeign(r) && audView(r).amount === '').length;
+      const estAud = recs.filter(r => isForeign(r) && audView(r).audEstimated).length;
       const unassigned = recs.filter(r => !r.unit).length;
       const noReceipt = recs.filter(r => !r.image).length;
       const last = claim.submissions[claim.submissions.length - 1];
@@ -200,7 +244,7 @@
         <div class="month-head">
           <div>
             <h2>${monthLabel(m)}</h2>
-            <div class="month-meta">${plural(recs.length, 'receipt')}${byUnit.map(([u, v]) => ` · ${u} ${money(v)}`).join('')}${unassigned ? ` · <span class="warn">${unassigned} without business unit</span>` : ''}${noReceipt ? ` · <span class="warn">${plural(noReceipt, 'receipt')} to follow</span>` : ''}${needAud ? ` · <span class="warn">${needAud} need${needAud === 1 ? 's' : ''} AUD amount</span>` : ''}</div>
+            <div class="month-meta">${plural(recs.length, 'receipt')}${byUnit.map(([u, v]) => ` · ${u} ${money(v)}`).join('')}${unassigned ? ` · <span class="warn">${unassigned} without business unit</span>` : ''}${noReceipt ? ` · <span class="warn">${plural(noReceipt, 'receipt')} to follow</span>` : ''}${needAud ? ` · <span class="warn">${needAud} need${needAud === 1 ? 's' : ''} AUD amount</span>` : ''}${estAud ? ` · <span class="est">${estAud} AUD estimated</span>` : ''}</div>
           </div>
           <div class="month-total">${money(total) || '$0.00'}${status}</div>
         </div>
@@ -227,7 +271,7 @@
             <div class="meta">${escapeHtml(fmtDay(r.date))}${r.unit ? ` · <span class="unit-chip">${escapeHtml(r.unit)}</span>` : ' · <span class="warn">No unit</span>'} · ${escapeHtml(r.category || '')}${n ? ` · 📎${n}` : ''}</div>
           </div>
           <div class="amt">${isForeign(r)
-            ? `${audView(r).amount !== '' ? money(audView(r).amount) : '<span class="warn">AUD?</span>'}<div class="gst-line">${escapeHtml(fxLabel(r))}</div>`
+            ? `${audView(r).amount === '' ? '<span class="warn">AUD?</span>' : audView(r).audEstimated ? `<span class="est" title="Estimate from the day's exchange rate">~${money(audView(r).amount)}</span>` : money(audView(r).amount)}<div class="gst-line">${escapeHtml(fxLabel(r))}${audView(r).audEstimated ? ' · est.' : ''}</div>`
             : `${money(r.amount)}${r.gst !== undefined && r.gst !== '' ? `<div class="gst-line">GST ${money(r.gst)}</div>` : ''}`}${isSubmitted ? `<div class="lock">${LOCK_ICON}</div>` : ''}</div>`;
         ul.appendChild(li);
       }
@@ -594,6 +638,7 @@
     f.currency.value = editing.currency || 'AUD';
     f.audAmount.value = editing.audAmount || '';
     audSource = editing.audSource || '';
+    estimate = editing.audEstimate ? { cur: editing.currency, date: editing.date, rate: parseFloat(editing.audEstimateRate), rateDate: editing.audEstimateDate } : null;
     $('fxCands').innerHTML = '';
     updateMoney();
     f.querySelectorAll('.filled').forEach(el => el.classList.remove('filled'));
@@ -611,6 +656,7 @@
     $('deleteBtn').hidden = !!editing.isNew;
     $('recropBtn').hidden = !editing.original;
     renderAttachments();
+    updateMoney(); // again now the date is set, so the exchange-rate estimate uses the right day
     await applyLock();
   }
 
@@ -674,10 +720,49 @@
     $('fxCard').hidden = !foreign;
     if (foreign) {
       const aud = num(f.audAmount.value);
-      $('fxSource').textContent = aud == null ? '' : audSource === 'bank' ? '· from bank statement' : '· entered';
-      $('fxRate').textContent = aud != null && total ? `Rate: 1 ${cur} = ${(aud / total).toFixed(4)} AUD` : `Use the AUD amount on your bank or card statement${settings.statement ? '' : ' (load one in Reconcile to look it up)'}.`;
+      const est = aud == null ? currentEstimate() : null;
+      // The estimate sits in the box greyed and in italics until a real amount replaces it.
+      f.audAmount.placeholder = est ? fix2(est.value) : '0.00';
+      f.audAmount.classList.toggle('has-estimate', !!est);
+      $('fxSource').textContent = aud != null ? (audSource === 'bank' ? '· from bank statement' : '· entered') : est ? '· estimate' : '';
+      $('fxSource').classList.toggle('est', !!est);
+      $('fxRate').innerHTML = aud != null && total
+        ? `Rate: 1 ${cur} = ${(aud / total).toFixed(4)} AUD`
+        : est
+          ? `<i>Estimate at ${est.rate.toFixed(4)} – the daily rate for ${escapeHtml(fmtDay(est.rateDate))}. Replace it with the bank statement amount when it arrives.</i>`
+          : `Use the AUD amount on your bank or card statement${settings.statement ? '' : ' (load one in Reconcile to look it up)'}.`;
+      scheduleEstimate();
     }
   }
+
+  /* ----- AUD estimate from the day's exchange rate ----- */
+  let estimate = null;   // { cur, date, rate, rateDate } for the receipt being edited
+  let estTimer = null, estWanted = '';
+  function currentEstimate() {
+    const f = $('editForm');
+    const total = num(f.amount.value);
+    if (!estimate || total == null || estimate.cur !== f.currency.value || estimate.date !== f.date.value) return null;
+    return { ...estimate, value: total * estimate.rate };
+  }
+  function scheduleEstimate() {
+    const f = $('editForm');
+    const cur = f.currency.value, date = f.date.value;
+    if (!cur || cur === 'AUD' || !date) return;
+    if (estimate && estimate.cur === cur && estimate.date === date) return;
+    const want = `${cur}|${date}`;
+    if (estWanted === want) return;
+    estWanted = want;
+    clearTimeout(estTimer);
+    estTimer = setTimeout(async () => {
+      const r = await fxRate(cur, date);
+      estWanted = '';
+      const g = $('editForm');
+      if (!r || g.currency.value !== cur || g.date.value !== date) return;
+      estimate = { cur, date, rate: r.rate, rateDate: r.date || date };
+      updateMoney();
+    }, 300);
+  }
+  $('editForm').date.addEventListener('change', updateMoney);
   $('editForm').currency.addEventListener('change', () => { $('fxCands').innerHTML = ''; updateMoney(); });
   $('editForm').audAmount.addEventListener('input', () => { audSource = 'manual'; updateMoney(); });
   $('editForm').audAmount.addEventListener('blur', e => { const n = num(e.target.value); if (n != null) e.target.value = fix2(n); });
@@ -847,6 +932,10 @@
       audAmount: f.currency.value !== 'AUD' && num(f.audAmount.value) != null ? fix2(num(f.audAmount.value)) : '',
       audSource: f.currency.value !== 'AUD' ? audSource : '',
     });
+    const est = currentEstimate();
+    Object.assign(editing, est
+      ? { audEstimate: fix2(est.value), audEstimateRate: est.rate.toFixed(6), audEstimateDate: est.rateDate }
+      : { audEstimate: '', audEstimateRate: '', audEstimateDate: '' });
   }
 
   $('recropBtn').onclick = async () => {
@@ -1032,6 +1121,8 @@
       toast(`${plural(missing.length, 'receipt')} still need${missing.length === 1 ? 's' : ''} a vendor, total, business unit or AUD amount.`, 4500);
       return openEdit(missing[0].id);
     }
+    const estimated = recs.filter(r => isForeign(r) && audView(r).audEstimated);
+    if (!copy && estimated.length && !confirm(`${plural(estimated.length, 'overseas receipt')} still ${estimated.length === 1 ? 'uses' : 'use'} an estimated AUD amount (from the day's exchange rate):\n\n${estimated.map(r => `• ${r.vendor} ${fxLabel(r)} ≈ ${money(audTotal(r))}`).join('\n')}\n\nSubmit with the estimates? They're marked as estimates for accounts. When the bank statement arrives, updating them reopens the claim and shows on the exception report.`)) return;
     const toFollow = recs.filter(r => !r.image);
     if (!copy && toFollow.length && !confirm(`${plural(toFollow.length, 'receipt')} in this claim ${toFollow.length === 1 ? 'is' : 'are'} still to follow:\n\n${toFollow.map(r => `• ${r.vendor} ${money(audTotal(r))}`).join('\n')}\n\nSubmit anyway? They'll be marked “Receipt to follow”. Adding the photo later reopens the claim and shows up on the exception report.`)) return;
     const sel = $('sendTo');
@@ -1144,7 +1235,7 @@
       { v: (parseFloat(r.amount) || 0) - (parseFloat(r.gst) || 0), t: 'money' }, { v: parseFloat(r.gst) || 0, t: 'money' }, { v: parseFloat(r.amount) || 0, t: 'money' },
       (r.attachments || []).length, r.image ? 'Yes' : 'To follow',
       isForeign(r) ? r.currency : 'AUD', isForeign(r) ? { v: parseFloat(r.fxAmount) || 0, t: 'money' } : '', isForeign(r) && r.rate ? { v: Math.round(r.rate * 10000) / 10000, t: 'number' } : '',
-      isForeign(r) ? (r.audSource === 'bank' ? 'Bank statement' : 'Entered') : '',
+      isForeign(r) ? (r.audBasis === 'estimate' ? `Estimate – daily rate ${r.audEstimateDate || ''}`.trim() : r.audSource === 'bank' ? 'Bank statement' : 'Entered') : '',
     ]);
     lines.push(null, ['', '', '', '', { v: 'TOTAL', t: 'bold' }, '', '', '', { v: total - totalGst, t: 'boldMoney' }, { v: totalGst, t: 'boldMoney' }, { v: total, t: 'boldMoney' }, '', '', '', '', '', '']);
     const sheets = [{
@@ -1214,11 +1305,12 @@
 
   function buildClaimCsv(ordered, label) {
     const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const head = ['Ref', 'Claim month', 'Business unit', 'Date', 'Vendor', 'ABN', 'Expense type', 'Purpose', 'Ex GST (AUD)', 'GST (AUD)', 'Total (AUD)', 'Supporting docs', 'Receipt', 'Currency', 'Foreign total', 'Rate to AUD'];
+    const head = ['Ref', 'Claim month', 'Business unit', 'Date', 'Vendor', 'ABN', 'Expense type', 'Purpose', 'Ex GST (AUD)', 'GST (AUD)', 'Total (AUD)', 'Supporting docs', 'Receipt', 'Currency', 'Foreign total', 'Rate to AUD', 'AUD from'];
     const rows = ordered.map(r => [r.ref, label, r.unit || '', r.date ? r.date.split('-').reverse().join('/') : '', r.vendor || '', r.abn || '', r.category || '', r.purpose || '',
       ((parseFloat(r.amount) || 0) - (parseFloat(r.gst) || 0)).toFixed(2), (parseFloat(r.gst) || 0).toFixed(2), (parseFloat(r.amount) || 0).toFixed(2),
       (r.attachments || []).length, r.image ? 'Yes' : 'To follow',
-      isForeign(r) ? r.currency : 'AUD', isForeign(r) ? (parseFloat(r.fxAmount) || 0).toFixed(2) : '', isForeign(r) && r.rate ? r.rate.toFixed(4) : '']);
+      isForeign(r) ? r.currency : 'AUD', isForeign(r) ? (parseFloat(r.fxAmount) || 0).toFixed(2) : '', isForeign(r) && r.rate ? r.rate.toFixed(4) : '',
+      isForeign(r) ? (r.audBasis === 'estimate' ? 'Estimate (daily rate)' : r.audSource === 'bank' ? 'Bank statement' : 'Entered') : '']);
     return '\uFEFF' + [head, ...rows].map(r => r.map(q).join(',')).join('\r\n');
   }
 
@@ -1327,7 +1419,7 @@
 
   async function runRecon(stmt) {
     const recs = await db.all();
-    const result = Recon.reconcile(stmt.transactions, recs.map(audView), stmt);
+    const result = Recon.reconcile(stmt.transactions, recs.map(r => audView(r, { actualOnly: true })), stmt);
     reconData = { ...stmt, result };
     renderRecon();
   }
@@ -1341,7 +1433,7 @@
     const unclaimed = r.unclaimed.filter(t => !ignored.has(t.key));
     const personal = r.unclaimed.filter(t => ignored.has(t.key));
     const tx = t => `<div class="rc-line"><span>${escapeHtml(fmtDay(t.date))}</span><span class="rc-desc">${escapeHtml(t.desc)}</span><strong>${money(t.amount)}</strong></div>`;
-    const cl = c => `<div class="rc-line"><span>${escapeHtml(fmtDay(c.date))}</span><span class="rc-desc">${escapeHtml(c.vendor || '')}${c.unit ? ` · ${escapeHtml(c.unit)}` : ''}${isForeign(c) ? ` · ${escapeHtml(fxLabel(c))}` : ''}</span><strong>${c.amount !== '' ? money(c.amount) : 'AUD ?'}</strong></div>`;
+    const cl = c => `<div class="rc-line"><span>${escapeHtml(fmtDay(c.date))}</span><span class="rc-desc">${escapeHtml(c.vendor || '')}${c.unit ? ` · ${escapeHtml(c.unit)}` : ''}${isForeign(c) ? ` · ${escapeHtml(fxLabel(c))}` : ''}</span><strong>${c.amount !== '' ? money(c.amount) : c.audEstimate ? `<span class="est">~${money(c.audEstimate)}</span>` : 'AUD ?'}</strong></div>`;
     out.innerHTML = `
       <div class="rc-file">${escapeHtml(reconData.name)} · ${escapeHtml(fmtDay(reconData.from))} – ${escapeHtml(fmtDay(reconData.to))} · ${plural(reconData.transactions.length, 'purchase')}${reconData.note ? `<br><span class="muted small">${escapeHtml(reconData.note)}</span>` : ''}</div>
       <div class="rc-tiles">
