@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '16';
+  const APP_VERSION = '17';
   const UNITS = ['Mentis', 'Macrack'];
 
   /* ---------------- Storage ---------------- */
@@ -648,15 +648,16 @@
     catch (err) { console.error(err); toast('Could not open that photo.'); }
     finally { busy(false); }
   }
-  $('receiptCam').addEventListener('change', e => { attachReceipt(e.target.files[0]); e.target.value = ''; });
-  $('receiptLib').addEventListener('change', e => { attachReceipt(e.target.files[0]); e.target.value = ''; });
+  $('receiptCam').addEventListener('change', e => { if (editing) editing.fromCamera = true; attachReceipt(e.target.files[0]); e.target.value = ''; });
+  $('receiptLib').addEventListener('change', e => { if (editing) editing.fromCamera = false; attachReceipt(e.target.files[0]); e.target.value = ''; });
 
-  async function onPhoto(file) {
+  async function onPhoto(file, { fromCamera = false } = {}) {
     if (!file) return;
     busy(true);
     try {
       const canvas = await fileToCanvas(file);
       editing = newRecord();
+      editing.fromCamera = fromCamera;
       cropFromEdit = false;
       startCrop(canvas, null);
     } catch (err) {
@@ -666,8 +667,8 @@
       busy(false);
     }
   }
-  $('cameraInput').addEventListener('change', e => { onPhoto(e.target.files[0]); e.target.value = ''; });
-  $('libraryInput').addEventListener('change', e => { onPhoto(e.target.files[0]); e.target.value = ''; });
+  $('cameraInput').addEventListener('change', e => { onPhoto(e.target.files[0], { fromCamera: true }); e.target.value = ''; });
+  $('libraryInput').addEventListener('change', e => { $('addSheet').hidden = true; onPhoto(e.target.files[0]); e.target.value = ''; });
 
   async function fileToCanvas(blob) {
     let src;
@@ -1417,6 +1418,9 @@
     }
     saveSettings();
     toast(editing.isNew ? 'Receipt saved' : 'Changes saved');
+    if (settings.savePhotos && rec.fromCamera && rec.image && rec.photoCopySaved !== String(rec.imageVer || 0)) {
+      saveReceiptCopy(rec).then(ok => { if (ok) db.put({ ...rec, photoCopySaved: String(rec.imageVer || 0) }).catch(() => {}); });
+    }
     editing = null;
     show('listView');
     renderList();
@@ -1496,6 +1500,7 @@
     f.name.value = settings.name;
     f.primary.value = settings.primary;
     f.accent.value = settings.accent;
+    f.savePhotos.checked = !!settings.savePhotos;
     const ul = $('emailList');
     ul.innerHTML = settings.emails.length ? '' : '<li class="muted">No saved addresses yet.</li>';
     settings.emails.forEach((em, i) => {
@@ -1591,6 +1596,28 @@
       toast('Logo updated');
     } catch { toast('Could not read that image.'); }
   });
+  $('settingsForm').savePhotos.addEventListener('change', e => { settings.savePhotos = e.target.checked; saveSettings(); });
+
+  /** Put a copy of a camera receipt in the phone's photos: Android → Download folder (shown in Gallery /
+      Google Photos); iPhone → share sheet with "Save Image". Web apps can't write to the photo library directly. */
+  async function saveReceiptCopy(r) {
+    const name = `Receipt_${r.date || todayISO()}_${safeFile(r.vendor || 'receipt').slice(0, 30)}${r.amount ? '_' + r.amount : ''}.jpg`;
+    const file = new File([r.image], name, { type: 'image/jpeg' });
+    const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    try {
+      if (ios && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: name });
+        return true;
+      }
+      saveFiles([file]);
+      toast('Receipt saved – copy added to your phone’s Download folder (Gallery / Photos).', 3500);
+      return true;
+    } catch (err) {
+      if (err && err.name !== 'AbortError') console.error(err);
+      return false;
+    }
+  }
+
   $('clearLogoBtn').onclick = () => { settings.logo = ''; saveSettings(); applyBrand(); };
   $('clearSentBtn').onclick = async () => {
     const claims = (await db.claims.all()).filter(c => c.status === 'submitted');

@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=16">
+  <link rel="stylesheet" href="styles.css?v=17">
 </head>
 <body>
   <header class="topbar">
@@ -282,6 +282,10 @@
         <button type="button" class="btn" id="addEmailBtn">Add</button>
       </div>
 
+      <h3>Photos</h3>
+      <label class="check"><input type="checkbox" name="savePhotos"> Save a copy of receipt photos I take to my phone's photos</label>
+      <p class="muted small" id="savePhotosHint">When you save a receipt taken with the camera, a copy of the cropped receipt is saved to your phone – on Android to the <strong>Download</strong> folder, which shows in Gallery / Google Photos; on iPhone the share sheet opens so you can tap <strong>Save Image</strong>.</p>
+
       <h3>Branding</h3>
       <div class="row">
         <label class="btn">
@@ -432,12 +436,12 @@
   <div class="toast" id="toast" hidden></div>
   <div class="busy" id="busy" hidden><div class="spinner"></div></div>
 
-  <script src="ocr.js?v=16"></script>
-  <script src="pdf.js?v=16"></script>
-  <script src="xlsx.js?v=16"></script>
-  <script src="recon.js?v=16"></script>
-  <script src="crop.js?v=16"></script>
-  <script src="docimport.js?v=16"></script>
-  <script src="app.js?v=16"></script>
+  <script src="ocr.js?v=17"></script>
+  <script src="pdf.js?v=17"></script>
+  <script src="xlsx.js?v=17"></script>
+  <script src="recon.js?v=17"></script>
+  <script src="crop.js?v=17"></script>
+  <script src="docimport.js?v=17"></script>
+  <script src="app.js?v=17"></script>
 </body>
 </html>

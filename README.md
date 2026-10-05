@@ -19,7 +19,7 @@ A claim started with **No receipt yet** can also have its receipt added later as
 
 **No receipt yet?** Tap **No receipt yet** to start the claim with just the details (vendor, total, date, unit, purpose). It shows as *Receipt to follow*; open it any time and tap **Take photo** or **Choose photo** to add the receipt – the reader fills in anything still blank. You can submit a month with receipts still to follow (you'll be asked to confirm); they're marked *Receipt to follow* in the PDF and spreadsheet, and adding the photo later reopens the claim and appears on the exception report as "Receipt photo added". **Add claim** in Reconciliation also creates one of these, filled in from the bank line.
 
-Receipts are kept **only on your phone**, in the browser's storage.
+Receipts are kept **only on your phone**, in the browser's storage. Optional: **Settings → Photos → Save a copy of receipt photos I take** saves the cropped receipt from each camera photo when you tap Save (named like `Receipt_2026-10-05_Qantas_412.00.jpg`) – on Android to the **Download** folder, which shows in Gallery / Google Photos; on iPhone via the share sheet's **Save Image**. Web apps can't write to the photo library directly, so this is the closest equivalent. Photos picked from the library aren't copied (they're already there), and each receipt image is copied once.
 
 ### Sending
 
