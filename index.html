@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=17">
+  <link rel="stylesheet" href="styles.css?v=18">
 </head>
 <body>
   <header class="topbar">
@@ -46,6 +46,7 @@
     <div class="tabs" role="tablist" id="tabsBar">
       <button class="tab active" data-filter="open">To submit</button>
       <button class="tab" data-filter="submitted">Submitted</button>
+      <button class="tab" data-filter="approvals">Approvals <span class="tab-count" id="approvalCount" hidden></span></button>
     </div>
     <div id="monthList"></div>
     <div class="empty" id="emptyState" hidden>
@@ -226,6 +227,10 @@
         <span>Expense type (type it in)</span>
         <input name="customCategory" id="customCategory" placeholder="e.g. Conference fees, Tolls, Gifts" maxlength="40">
       </label>
+      <label class="field" id="glField">
+        <span>GL account <em class="muted small">– set from the expense type; change if needed</em></span>
+        <select name="gl" id="glSelect"></select>
+      </label>
       <fieldset class="field" id="travelField" hidden>
         <span>Employee travelling?</span>
         <div class="segmented" id="travelPicker">
@@ -270,6 +275,58 @@
       <label class="field">
         <span>Your name (shown on the report)</span>
         <input name="name" placeholder="Michael Shaw">
+      </label>
+
+      <label class="field">
+        <span>Your email (approvals come back to you)</span>
+        <input type="email" name="myEmail" placeholder="you@mentis.com">
+      </label>
+
+      <h3>Approval</h3>
+      <p class="muted small">Claims go to your approver first. They open the claim PDF in this app, check the GL coding and approve or reject it. Approved claims go to accounts with the Sage upload file.</p>
+      <label class="field">
+        <span>Your approver's email</span>
+        <input type="email" name="approverEmail" placeholder="manager@mentis.com">
+      </label>
+      <label class="field">
+        <span>Accounts email (approved claims go here)</span>
+        <input type="email" name="accountsEmail" placeholder="accounts@mentis.com">
+      </label>
+
+      <h3>Sage details</h3>
+      <div class="row">
+        <label class="field grow">
+          <span>Branch</span>
+          <select name="sageBranch">
+            <option value="">Choose…</option>
+            <option value="BRI01">BRI01 – Brisbane</option>
+            <option value="MEL01">MEL01 – Melbourne</option>
+            <option value="PER01">PER01 – Perth</option>
+            <option value="__other">Other – type the code…</option>
+          </select>
+        </label>
+        <label class="field grow" id="sageBranchOtherWrap" hidden>
+          <span>Branch code</span>
+          <input name="sageBranchOther" placeholder="e.g. SYD01" maxlength="10">
+        </label>
+      </div>
+      <div class="row">
+        <label class="field grow">
+          <span>Region</span>
+          <input name="sageRegion" placeholder="e.g. QUEENL01" maxlength="12">
+        </label>
+        <label class="field grow">
+          <span>Department</span>
+          <input name="sageDept" placeholder="FINANC01" maxlength="12">
+        </label>
+      </div>
+      <label class="field">
+        <span>Your Sage supplier code (for personal reimbursements)</span>
+        <input name="sagePersonalSupplier" placeholder="Ask accounts, e.g. EMP0123" maxlength="16">
+      </label>
+      <label class="field">
+        <span>Company card supplier code</span>
+        <input name="sageCardSupplier" placeholder="BP1001673" maxlength="16">
       </label>
 
       <h3>Email recipients</h3>
@@ -319,6 +376,16 @@
         <button type="button" class="btn primary" id="settingsDone">Done</button>
       </div>
     </form>
+  </section>
+
+  <!-- ===== Approve view ===== -->
+  <section id="approveView" class="view" hidden>
+    <div id="approveBody"></div>
+    <div class="bottom-bar" id="approveBar">
+      <button type="button" class="btn ghost" id="approveBack">Back</button>
+      <button type="button" class="btn ghost danger" id="rejectBtn">Reject</button>
+      <button type="button" class="btn primary" id="approveBtn">Approve</button>
+    </div>
   </section>
 
   <!-- ===== Dashboard view ===== -->
@@ -379,6 +446,10 @@
         <span class="add-ico">📧</span><span><strong>Email or text file</strong><small>A saved .eml, .html or .txt receipt</small></span>
         <input type="file" id="emailFileInput" accept=".eml,.html,.htm,.txt,.mht,message/rfc822,text/plain,text/html" hidden>
       </label>
+      <label class="add-opt">
+        <span class="add-ico">✅</span><span><strong>Claim to approve / approval</strong><small>Open a claim PDF someone sent you, or your approver's reply</small></span>
+        <input type="file" id="claimPdfInput" accept="application/pdf,.pdf" hidden>
+      </label>
       <button type="button" class="add-opt" id="noReceiptBtn">
         <span class="add-ico">✍️</span><span><strong>No receipt yet</strong><small>Enter the details now, add the receipt later</small></span>
       </button>
@@ -433,15 +504,32 @@
     </div>
   </div>
 
+  <!-- ===== Approval / Sage file sending ===== -->
+  <div class="sheet-backdrop" id="outSheet" hidden>
+    <div class="sheet" role="dialog" aria-labelledby="outTitle">
+      <h2 id="outTitle">Send</h2>
+      <p class="muted" id="outSummary"></p>
+      <div id="outCopies" class="row wrap"></div>
+      <p class="small attach-note" id="outFiles"></p>
+      <div class="row">
+        <button type="button" class="btn ghost" id="outClose">Close</button>
+        <button type="button" class="btn ghost" id="outSave">Save files</button>
+        <button type="button" class="btn primary" id="outShare">Choose an app</button>
+      </div>
+      <p class="muted small" id="outNote"></p>
+    </div>
+  </div>
+
   <div class="toast" id="toast" hidden></div>
   <div class="busy" id="busy" hidden><div class="spinner"></div></div>
 
-  <script src="ocr.js?v=17"></script>
-  <script src="pdf.js?v=17"></script>
-  <script src="xlsx.js?v=17"></script>
-  <script src="recon.js?v=17"></script>
-  <script src="crop.js?v=17"></script>
-  <script src="docimport.js?v=17"></script>
-  <script src="app.js?v=17"></script>
+  <script src="ocr.js?v=18"></script>
+  <script src="pdf.js?v=18"></script>
+  <script src="xlsx.js?v=18"></script>
+  <script src="recon.js?v=18"></script>
+  <script src="crop.js?v=18"></script>
+  <script src="docimport.js?v=18"></script>
+  <script src="accounting.js?v=18"></script>
+  <script src="app.js?v=18"></script>
 </body>
 </html>

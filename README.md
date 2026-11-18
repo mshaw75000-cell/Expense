@@ -60,6 +60,36 @@ Each receipt has a **Currency** (AUD by default; the reader picks up US$, NZ$, �
 - **Reconcile** also spots overseas receipts without an AUD amount and offers **Use $X AUD** from the matching charge.
 - A month can't be submitted while a foreign receipt has no AUD amount at all (not even an estimate, e.g. if it was entered offline). Claim totals, the PDF and the spreadsheet use AUD; the PDF and spreadsheet also show the foreign amount, the rate and whether the AUD came from the bank statement or was entered.
 
+## GL coding, approval and the Sage upload file
+
+**GL accounts.** Each receipt has a **GL account**, set automatically from the expense type (from the Mentis GL list), and you can change it. Split-bill lines each get their own GL account. Business unit **Macrack** always goes to *515051 Macrack Expenses*.
+
+| Expense type | Default GL |
+| --- | --- |
+| Meals & Entertainment, Employee Meals – Not Travelling | 314050 Entertainment (OC003) |
+| Employee Meals – Travelling | 317503 Meals |
+| Staff Amenities | 317306 Amenities |
+| Parking / Travel – Ground | 317501 Parking / Taxi |
+| Fuel, Fuel / Mileage | 304651 Fuel |
+| Travel – Air | 317500 Flights |
+| Lodging | 317502 Accomm Hotel |
+| Office Supplies | 314703 Stationery |
+| Software / Subscriptions | 314252 IT Licence |
+| Other / typed-in types | must be chosen |
+
+**Tax codes:** each account's code from the list. A GST account (OC001) with no GST on the receipt, or on an overseas receipt, goes as **OC002**. On **OC003** lines (GST not claimable) the whole amount is posted as the cost, with GST 0.
+
+**Approval.** In **Settings**, enter your email, your **approver's email**, the **accounts email** and your **Sage details** (branch, region, department, and your Sage supplier code for personal reimbursements).
+
+1. **Submit** sends the claim to your approver (the approver's address is picked automatically). The claim PDF carries the claim's data. The claim shows **Awaiting approval**.
+2. The approver opens the PDF in their copy of the app: **Share** it to Expenses, or **Add other ways → Claim to approve / approval**. It appears under the **Approvals** tab. They check each line's GL account and tax code (and the Sage supplier, branch, region, department and posting date), then **Approve** or **Reject**. A rejection needs a comment.
+3. Approving produces an **approval PDF** (the decision plus GL coding) and the **Sage upload file** (`Sage_<name>_<month>.csv`). The approver sends both to accounts and the claimant. A rejection produces a rejection PDF for the claimant.
+4. When the claimant opens the approval or rejection PDF in their app, the claim shows **Approved** (or **Rejected** with the comment, and the app offers to reopen it for fixing and resubmitting).
+
+Self-approval is allowed but is marked on the approval PDF. **Approvals → Sage file for N approved claims** combines every approved claim not yet sent into one upload file.
+
+**Sage file format** (matches the sample upload): one `T` header per claim (`INV`, supplier code, `MMMYY CC F SURNAME`, `MOE01`, branch, posting date, `AUD`, `PO8`, `DOM`), then an `L` line per expense (branch, `MAU`, GL account, net, tax code, GST, `MMMYY CC INITIALS VENDOR`) and an `A` analysis line (department, region, net). Company card claims use supplier **BP1001673** and prefix **CC**. Personal reimbursements use the claimant's own supplier code and prefix **PR**. Constants live in `accounting.js` (`SAGE`); the GL list and default mapping are at the top of the same file.
+
 ## Locking, reopening and exception reports
 
 - A submitted claim is **locked**: its receipts can be viewed but not changed or deleted.
@@ -132,4 +162,5 @@ To change the default colours for everyone, edit `--primary` and `--accent` at t
 | `pdf.js` | Builds the PDF claim report (no external libraries) |
 | `xlsx.js` | Builds the Excel spreadsheets (no external libraries) |
 | `recon.js` | Reads bank statements and matches them to claims |
+| `accounting.js` | GL accounts, expense type → GL mapping, Sage upload file, claim/approval data in PDFs |
 | `sw.js`, `manifest.webmanifest`, `icon*` | Offline support and home-screen icon |

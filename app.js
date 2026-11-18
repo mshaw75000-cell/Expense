@@ -4,7 +4,7 @@
 
   const $ = id => document.getElementById(id);
   const MAX_WORK_SIDE = 2400;
-  const APP_VERSION = '17';
+  const APP_VERSION = '18';
   const UNITS = ['Mentis', 'Macrack'];
 
   /* ---------------- Storage ---------------- */
@@ -12,11 +12,13 @@
   const db = (() => {
     let dbp;
     const open = () => dbp || (dbp = new Promise((res, rej) => {
-      const req = indexedDB.open('mentis-expenses', 2);
+      const req = indexedDB.open('mentis-expenses', 3);
       req.onupgradeneeded = () => {
         const d = req.result;
         if (!d.objectStoreNames.contains('receipts')) d.createObjectStore('receipts', { keyPath: 'id' });
         if (!d.objectStoreNames.contains('claims')) d.createObjectStore('claims', { keyPath: 'month' });
+        // claims other people sent this phone to approve
+        if (!d.objectStoreNames.contains('approvals')) d.createObjectStore('approvals', { keyPath: 'id' });
       };
       req.onsuccess = () => res(req.result);
       req.onerror = () => rej(req.error);
@@ -36,11 +38,12 @@
       put: rec => tx(store, 'readwrite', s => s.put(rec)),
       del: id => tx(store, 'readwrite', s => s.delete(id)),
     });
-    return { ...api('receipts'), claims: api('claims') };
+    return { ...api('receipts'), claims: api('claims'), approvals: api('approvals') };
   })();
 
   const SETTINGS_KEY = 'mentis-expenses-settings';
-  const defaults = { name: '', emails: [], lastEmail: '', lastUnit: '', logo: '', primary: '#0b2a4a', accent: '#00a6a6', enhance: true, reconIgnore: [], statement: null };
+  const defaults = { name: '', emails: [], lastEmail: '', lastUnit: '', logo: '', primary: '#0b2a4a', accent: '#00a6a6', enhance: true, reconIgnore: [], statement: null,
+    myEmail: '', approverEmail: '', accountsEmail: '', sageBranch: '', sageRegion: '', sageDept: 'FINANC01', sagePersonalSupplier: '', sageCardSupplier: 'BP1001673' };
   let settings = load();
   function load() {
     try { return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
@@ -53,8 +56,8 @@
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
   /* ---------------- UI helpers ---------------- */
-  const views = ['listView', 'cropView', 'editView', 'settingsView', 'reconView', 'dashView'];
-  const titles = { listView: 'Claims', cropView: 'Crop', editView: 'Receipt', settingsView: 'Settings', reconView: 'Reconcile', dashView: 'Spending' };
+  const views = ['listView', 'cropView', 'editView', 'settingsView', 'reconView', 'dashView', 'approveView'];
+  const titles = { listView: 'Claims', cropView: 'Crop', editView: 'Receipt', settingsView: 'Settings', reconView: 'Reconcile', dashView: 'Spending', approveView: 'Approve claim' };
   function show(view) {
     views.forEach(v => { $(v).hidden = v !== view; });
     $('viewTitle').textContent = titles[view];
@@ -100,10 +103,10 @@
   // What accounts sees as a change: these fields, compared with the last submission.
   const TRACKED = [
     ['date', 'Date'], ['vendor', 'Vendor'], ['purpose', 'Purpose'], ['unit', 'Business unit'], ['category', 'Expense type'],
-    ['amount', 'Total (AUD)'], ['gst', 'GST'], ['currency', 'Currency'], ['fxAmount', 'Foreign amount'], ['audBasis', 'AUD amount basis'], ['hasReceipt', 'Receipt'], ['attachCount', 'Supporting documents'], ['imageVer', 'Receipt image'], ['attendeesText', 'Attendees'], ['abn', 'Supplier ABN'], ['travelStatus', 'Employee travelling'],
+    ['amount', 'Total (AUD)'], ['gst', 'GST'], ['currency', 'Currency'], ['fxAmount', 'Foreign amount'], ['audBasis', 'AUD amount basis'], ['hasReceipt', 'Receipt'], ['attachCount', 'Supporting documents'], ['imageVer', 'Receipt image'], ['attendeesText', 'Attendees'], ['abn', 'Supplier ABN'], ['travelStatus', 'Employee travelling'], ['glCode', 'GL account'],
   ];
   const snapshotOf = (r, ref) => ({
-    id: r.lineKey || r.id, ref, attendeesText: r.attendeesText || '', abn: r.abn || '', travelStatus: travelText(r), date: r.date || '', vendor: r.vendor || '', purpose: r.purpose || '', unit: r.unit || '', category: r.category || '',
+    id: r.lineKey || r.id, ref, glCode: r.glCode || '', attendeesText: r.attendeesText || '', abn: r.abn || '', travelStatus: travelText(r), date: r.date || '', vendor: r.vendor || '', purpose: r.purpose || '', unit: r.unit || '', category: r.category || '',
     amount: r.amount || '', gst: r.gst || '', currency: r.currency || 'AUD', fxAmount: r.fxAmount || '', audBasis: r.audBasis || '', hasReceipt: !!r.image, attachCount: (r.attachments || []).length, imageVer: r.imageVer || 0,
   });
   const showVal = (k, v) => (k === 'amount' || k === 'gst') ? (v === '' ? '(blank)' : money(v)) : k === 'imageVer' ? 'version ' + (v + 1) : k === 'date' ? fmtDay(v) : (v === '' ? '(blank)' : String(v));
@@ -240,7 +243,7 @@
   const hasSplits = r => Array.isArray(r.splits) && r.splits.length > 1;
   function linesOf(r) {
     const v = audView(r);
-    const base = { ...v, lineKey: r.id, receiptTotal: v.amount, receiptGst: v.gst, attendeesText: peopleText(r.attendees), taxInvIssue: taxInvoiceIssue(r), travelText: travelText(r) };
+    const base = withGl({ ...v, lineKey: r.id, receiptTotal: v.amount, receiptGst: v.gst, attendeesText: peopleText(r.attendees), taxInvIssue: taxInvoiceIssue(r), travelText: travelText(r) }, r.gl);
     if (!hasSplits(r)) return [base];
     const total = parseFloat(r.amount) || 0;
     const k = v.amount === '' ? null : total ? (parseFloat(v.amount) || 0) / total : 1; // receipt currency → AUD
@@ -251,7 +254,13 @@
       gst: k == null ? '' : ((parseFloat(s.gst) || 0) * k).toFixed(2),
       fxAmount: isForeign(r) ? s.amount : v.fxAmount,
       attachments: i === 0 ? r.attachments : [],
-    }));
+    })).map((l, i) => withGl(l, r.splits[i].gl));
+  }
+  /** GL account for a line: the one chosen on the receipt, else the default for its expense type / unit. */
+  function withGl(l, chosen) {
+    const key = chosen || Accounting.defaultGl(l.category, l.unit);
+    const g = Accounting.gl(key);
+    return { ...l, gl: g ? key : '', glCode: g ? g.code : '', glName: g ? g.name : '', taxCode: g ? Accounting.taxCodeFor(key, { gst: l.gst, foreign: isForeign(l) }) : '' };
   }
   const unitTotals = recs => {
     const t = {};
@@ -348,6 +357,11 @@
 
     $('tabsBar').hidden = searching();
     $('searchNote').hidden = !searching();
+    db.approvals.all().then(list => {
+      const n = list.filter(a => a.status === 'pending').length;
+      $('approvalCount').hidden = !n; $('approvalCount').textContent = n;
+    }).catch(() => {});
+    if (filter === 'approvals' && !searching()) return renderApprovals();
     if (searching()) {
       const n = [...months.values()].reduce((s, l) => s + l.length, 0);
       $('searchNote').innerHTML = `${plural(n, 'receipt')}${search.flag ? ` – ${FLAG_LABELS[search.flag]}` : ''}, all months <button class="btn small ghost" id="clearSearch">Clear</button>`;
@@ -377,7 +391,11 @@
       let changes = 0;
       if (claim.status === 'reopened') changes = exceptionsFor(claim, orderForReport(recs).map(r => snapshotOf(r, r.ref))).length;
 
-      const status = isSubmitted ? `<span class="status s-sub">${LOCK_ICON} Submitted</span>`
+      const ap = claim.approval && claim.approval.submissionNo === claim.submissions.length ? claim.approval : null;
+      const status = isSubmitted && ap && ap.status === 'approved' ? `<span class="status s-ok">${LOCK_ICON} Approved</span>`
+        : isSubmitted && ap && ap.status === 'rejected' ? `<span class="status s-bad">${LOCK_ICON} Rejected</span>`
+        : isSubmitted && ap ? `<span class="status s-await">${LOCK_ICON} Awaiting approval</span>`
+        : isSubmitted ? `<span class="status s-sub">${LOCK_ICON} Submitted</span>`
         : claim.status === 'reopened' ? `<span class="status s-re">Reopened</span>` : `<span class="status s-open">Not submitted</span>`;
       const sec = document.createElement('section');
       sec.className = 'month';
@@ -390,7 +408,7 @@
           </div>
           <div class="month-total">${money(total) || '$0.00'}${status}</div>
         </div>
-        ${last && !searching() ? `<div class="month-sub">${claim.status === 'reopened' ? `Reopened · ${plural(changes, 'change')} since ` : ''}submitted ${fmtDay(last.at.slice(0, 10))} to ${escapeHtml(last.to)}${claim.submissions.length > 1 ? ` (resubmission ${claim.submissions.length - 1})` : ''}</div>` : ''}
+        ${last && !searching() ? `<div class="month-sub">${claim.status === 'reopened' ? `Reopened · ${plural(changes, 'change')} since ` : ''}submitted ${fmtDay(last.at.slice(0, 10))} to ${escapeHtml(last.to)}${claim.submissions.length > 1 ? ` (resubmission ${claim.submissions.length - 1})` : ''}${ap && ap.status !== 'awaiting' ? ` · <b class="${ap.status === 'approved' ? 'ok' : 'warn'}">${ap.status === 'approved' ? 'Approved' : 'Rejected'} by ${escapeHtml(ap.by)} ${fmtDay((ap.at || '').slice(0, 10))}</b>${ap.comment ? ` – “${escapeHtml(ap.comment)}”` : ''}` : ''}</div>` : ''}
         <ul class="receipt-list"></ul>
         ${searching() ? '' : `<div class="month-actions">
           ${isSubmitted
@@ -485,7 +503,7 @@
       return;
     }
     const li = e.target.closest('.receipt');
-    if (li) openEdit(li.dataset.id);
+    if (li && li.dataset.id) openEdit(li.dataset.id);
   });
 
   document.querySelectorAll('#tabsBar .tab').forEach(tab => tab.addEventListener('click', () => {
@@ -554,6 +572,7 @@
     closeAdd();
     busy(true);
     try {
+      if (!into && await openDataPdf(file)) return; // a claim to approve, or an approver's decision
       const { text, pages, pageCount } = await DocImport.readPdf(file);
       if (!pages.length) throw new Error('empty PDF');
       const imgs = await imagesFrom(pages[0]);
@@ -853,6 +872,7 @@
     $('recurringWrap').hidden = !!editing.recurringFrom;
     $('recurringNote').hidden = !editing.recurringFrom;
     $('recurringNote').textContent = editing.recurringFrom ? 'Added automatically from a monthly repeat – stop it in Settings → Monthly repeats.' : '';
+    refreshGl(editing.gl || '');
     renderSplits();
     renderPeople();
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -897,7 +917,9 @@
 
   function setUnit(u) {
     document.querySelectorAll('#unitPicker input').forEach(i => { i.checked = i.value === u; });
+    refreshGl();
   }
+  document.querySelectorAll('#unitPicker input').forEach(i => i.addEventListener('change', () => refreshGl()));
   const readUnit = () => { const c = document.querySelector('#unitPicker input:checked'); return c ? c.value : ''; };
 
   /* ----- Total / GST / Ex GST -----
@@ -1115,6 +1137,7 @@
     sel.value = isPreset ? (value || '') : CUSTOM;
     $('customCategoryWrap').hidden = isPreset;
     $('customCategory').value = isPreset ? '' : value;
+    refreshGl();
   }
 
   function readCategory() {
@@ -1131,7 +1154,20 @@
     $('customCategoryWrap').hidden = !custom;
     if (custom) $('customCategory').focus();
     renderPeople();
+    refreshGl();
   });
+  $('customCategory').addEventListener('input', () => refreshGl());
+
+  /* ----- GL account -----
+     Empty = automatic (follows the expense type and business unit); otherwise the account picked. */
+  const glOptions = (auto, value) => `<option value="">${auto ? `Automatic – ${escapeHtml(Accounting.glLabel(auto))}` : 'Choose GL account…'}</option>` +
+    Accounting.GL_ACCOUNTS.map(g => `<option value="${escapeHtml(g.key)}"${g.key === value ? ' selected' : ''}>${escapeHtml(`${g.code} · ${g.name}`)}</option>`).join('');
+  function refreshGl(value) {
+    const sel = $('glSelect');
+    const v = value !== undefined ? value : sel.value;
+    sel.innerHTML = glOptions(Accounting.defaultGl(readCategory(), readUnit()), v);
+    sel.value = v || '';
+  }
 
   /* ----- Tax invoice box ----- */
   function updateTaxInv() {
@@ -1169,6 +1205,7 @@
     $('splitBtn').hidden = on || editLocked;
     $('unitField').hidden = on;
     $('categoryField').hidden = on;
+    $('glField').hidden = on;
     if (on) $('customCategoryWrap').hidden = true;
     const cats = [...new Set([...CATEGORIES, ...splits.map(x => x.category).filter(Boolean)])];
     $('splitRows').innerHTML = splits.map((x, i) => `
@@ -1178,6 +1215,7 @@
         <label class="mini"><span>Amount</span><input data-k="amount" inputmode="decimal" value="${escapeHtml(x.amount || '')}" placeholder="0.00"></label>
         <label class="mini"><span>${$('editForm').currency.value !== 'AUD' ? 'Tax' : 'GST'}</span><input data-k="gst" inputmode="decimal" value="${escapeHtml(x.gst || '')}" placeholder="0.00"></label>
         <input data-k="note" class="note" value="${escapeHtml(x.note || '')}" placeholder="Note, e.g. 2 nights">
+        <select data-k="gl" aria-label="GL account">${glOptions(Accounting.defaultGl(x.category, x.unit), x.gl || '')}</select>
         <button type="button" class="split-del" data-del="${i}" aria-label="Remove line"${editLocked ? ' hidden' : ''}>×</button>
       </div>`).join('');
     if (editLocked) $('splitRows').querySelectorAll('input, select').forEach(el => { el.disabled = true; });
@@ -1200,7 +1238,7 @@
     const cat = readCategory(), unit = readUnit() || settings.lastUnit || '';
     splits = [
       // first line soaks up whatever the other lines don't take; GST follows 1/11 of each line on a GST receipt
-      { id: uid(), category: cat, unit, amount: fix2(num(f.amount.value)), gst: f.gst.value || '0.00', gstAuto: num(f.gst.value) > 0, note: '', auto: true },
+      { id: uid(), category: cat, unit, gl: $('glSelect').value || '', amount: fix2(num(f.amount.value)), gst: f.gst.value || '0.00', gstAuto: num(f.gst.value) > 0, note: '', auto: true },
       { id: uid(), category: '', unit, amount: '', gst: '', gstAuto: true, note: '' },
     ];
     renderSplits();
@@ -1208,7 +1246,7 @@
   $('splitAdd').onclick = () => { splits.push({ id: uid(), category: '', unit: splits[0] ? splits[0].unit : '', amount: '', gst: '', gstAuto: true, note: '' }); renderSplits(); };
   $('splitRemove').onclick = () => {
     if (!splits.length) return;
-    setCategory(splits[0].category || ''); setUnit(splits[0].unit || '');
+    setCategory(splits[0].category || ''); setUnit(splits[0].unit || ''); refreshGl(splits[0].gl || '');
     splits = [];
     renderSplits();
   };
@@ -1238,8 +1276,12 @@
   });
   $('splitRows').addEventListener('change', e => {
     const row = e.target.closest('.split-row'); if (!row) return;
-    splits[Number(row.dataset.i)][e.target.dataset.k] = e.target.value;
+    const x = splits[Number(row.dataset.i)];
+    x[e.target.dataset.k] = e.target.value;
     if (e.target.dataset.k === 'category') renderPeople();
+    if (e.target.dataset.k === 'category' || e.target.dataset.k === 'unit') {
+      row.querySelector('[data-k=gl]').innerHTML = glOptions(Accounting.defaultGl(x.category, x.unit), x.gl || '');
+    }
   });
 
   /* ----- Attendees / employees travelling ----- */
@@ -1335,6 +1377,7 @@
       date: f.date.value || editing.date,
       category: readCategory(),
       unit: readUnit(),
+      gl: $('glSelect').value || '',
       currency: f.currency.value || 'AUD',
       audAmount: f.currency.value !== 'AUD' && num(f.audAmount.value) != null ? fix2(num(f.audAmount.value)) : '',
       audSource: f.currency.value !== 'AUD' ? audSource : '',
@@ -1344,7 +1387,7 @@
       travelStatus: (document.querySelector('#travelPicker input:checked') || {}).value || '',
       attendees: people.filter(p => p.name.trim()).map(p => ({ name: p.name.trim(), org: (p.org || '').trim(), type: p.type || 'Employee', ...(p.type === 'Employee' && p.travel ? { travel: p.travel } : {}) })),
       recurring: f.recurring.checked && !editing.recurringFrom,
-      splits: splits.length > 1 ? splits.map(x => ({ id: x.id, category: x.category, unit: x.unit, amount: num(x.amount) != null ? fix2(num(x.amount)) : '', gst: num(x.gst) != null ? fix2(num(x.gst)) : '0.00', note: (x.note || '').trim() })) : [],
+      splits: splits.length > 1 ? splits.map(x => ({ id: x.id, category: x.category, unit: x.unit, amount: num(x.amount) != null ? fix2(num(x.amount)) : '', gst: num(x.gst) != null ? fix2(num(x.gst)) : '0.00', note: (x.note || '').trim(), gl: x.gl || '' })) : [],
     });
     if (editing.splits.length) { editing.category = editing.splits[0].category; editing.unit = editing.splits[0].unit; }
     const est = currentEstimate();
@@ -1501,6 +1544,8 @@
     f.primary.value = settings.primary;
     f.accent.value = settings.accent;
     f.savePhotos.checked = !!settings.savePhotos;
+    ['myEmail', 'approverEmail', 'accountsEmail', 'sageBranch', 'sageBranchOther', 'sageRegion', 'sageDept', 'sagePersonalSupplier', 'sageCardSupplier'].forEach(k => { f[k].value = settings[k] || ''; });
+    $('sageBranchOtherWrap').hidden = settings.sageBranch !== '__other';
     const ul = $('emailList');
     ul.innerHTML = settings.emails.length ? '' : '<li class="muted">No saved addresses yet.</li>';
     settings.emails.forEach((em, i) => {
@@ -1596,6 +1641,20 @@
       toast('Logo updated');
     } catch { toast('Could not read that image.'); }
   });
+  ['myEmail', 'approverEmail', 'accountsEmail', 'sageBranchOther', 'sageRegion', 'sageDept', 'sagePersonalSupplier', 'sageCardSupplier'].forEach(k => {
+    $('settingsForm')[k].addEventListener('input', e => {
+      const v = e.target.value.trim();
+      settings[k] = /Email$/.test(k) ? v.toLowerCase() : /^sage/.test(k) ? v.toUpperCase() : v;
+      saveSettings();
+    });
+  });
+  $('settingsForm').sageBranch.addEventListener('change', e => {
+    settings.sageBranch = e.target.value;
+    $('sageBranchOtherWrap').hidden = e.target.value !== '__other';
+    const region = Accounting.regionFor(e.target.value);
+    if (region) { settings.sageRegion = region; $('settingsForm').sageRegion.value = region; }
+    saveSettings();
+  });
   $('settingsForm').savePhotos.addEventListener('change', e => { settings.savePhotos = e.target.checked; saveSettings(); });
 
   /** Put a copy of a camera receipt in the phone's photos: Android → Download folder (shown in Gallery /
@@ -1658,7 +1717,9 @@
     sel.innerHTML = '';
     for (const em of settings.emails) sel.add(new Option(em, em));
     sel.add(new Option('+ New address…', '__new'));
-    sel.value = settings.emails.includes(settings.lastEmail) ? settings.lastEmail : (settings.emails[0] || '__new');
+    const approver = (settings.approverEmail || '').toLowerCase();
+    if (approver && !settings.emails.includes(approver)) sel.add(new Option(approver, approver), 0);
+    sel.value = !copy && approver ? approver : settings.emails.includes(settings.lastEmail) ? settings.lastEmail : (settings.emails[0] || approver || '__new');
     $('sendToNewWrap').hidden = sel.value !== '__new';
     $('sendToNew').value = '';
     $('sendSheet').hidden = false;
@@ -1715,9 +1776,10 @@
         jpeg: r.image && !(r.splitIndex > 0) ? new Uint8Array(await r.image.arrayBuffer()) : null, // split lines share one receipt image
         attachments: await Promise.all((r.attachments || []).map(async a => ({ ...a, jpeg: new Uint8Array(await a.blob.arrayBuffer()) }))),
       })));
+      const payload = await claimPayload({ month, label, ordered, exceptions, submissionNo, previous, total, totalGst, copy, claim });
       const pdf = ExpensePdf.buildClaimReport({
         name: settings.name, monthLabel: label, submissionNo, previous, receipts: withBytes, exceptions, personal: isPersonalKey(month),
-        primary: settings.primary, accent: settings.accent,
+        primary: settings.primary, accent: settings.accent, approver: settings.approverEmail || '', embed: Accounting.embedBlock(payload),
       });
       const xlsx = buildClaimSheet({ month, label, ordered, exceptions, submissionNo, previous, total, totalGst });
       const base = `${isPersonalKey(month) ? 'Reimbursement_Claim' : 'Expense_Claim'}_${safeFile(who)}_${monthOfKey(month)}${submissionNo > 1 ? `_resub${submissionNo - 1}` : ''}`;
@@ -1745,9 +1807,10 @@
         ? `Hi,\n\nPlease find attached my reimbursement claim for ${monthLabel(monthOfKey(month))}${resubTag} – business expenses I paid with my personal card or cash. Please reimburse the total to me.\n\n`
         : `Hi,\n\nPlease find attached my expense claim for ${label}${resubTag}.\n\n`) + `${lines.join('\n')}\n` +
         `Total: ${money(total) || '$0.00'} (GST ${money(totalGst) || '$0.00'}; ex GST ${money(total - totalGst) || '$0.00'})${exText}\n\n` +
-        `Attached: PDF claim with receipts and supporting documents, and an Excel spreadsheet.\n\nThanks,\n${settings.name || ''}`.trim();
+        `Attached: PDF claim with receipts and supporting documents, and an Excel spreadsheet.\n\n` +
+        `To approve: open the PDF in Mentis Expenses (share it to the app, or Add other ways → Claim to approve). Claim code ${payload.digest}.\n\nThanks,\n${settings.name || ''}`.trim();
 
-      prepared = { files, shareFiles, shareOptions, shareTry: 0, subject, body, month, items, total, exceptions, copy };
+      prepared = { files, shareFiles, shareOptions, shareTry: 0, subject, body, month, items, total, exceptions, copy, digest: payload.digest };
       $('viaShareOpt').hidden = !shareFiles;
       const via = shareFiles ? (settings.sendVia || 'share') : (settings.sendVia === 'save' ? 'save' : 'email');
       document.querySelectorAll('#viaPicker input').forEach(i => { i.checked = i.value === via; });
@@ -1762,7 +1825,7 @@
 
   function buildClaimSheet({ month, label, ordered, exceptions, submissionNo, previous, total, totalGst }) {
     const lines = ordered.map(r => [
-      r.ref, label, r.unit || '', { v: r.date, t: 'date' }, r.vendor || '', r.abn || '', r.category || '', { v: r.purpose || '', t: 'wrap' },
+      r.ref, label, r.unit || '', { v: r.date, t: 'date' }, r.vendor || '', r.abn || '', r.category || '', r.glCode || '', r.glName || '', r.taxCode || '', { v: r.purpose || '', t: 'wrap' },
       { v: (parseFloat(r.amount) || 0) - (parseFloat(r.gst) || 0), t: 'money' }, { v: parseFloat(r.gst) || 0, t: 'money' }, { v: parseFloat(r.amount) || 0, t: 'money' },
       (r.attachments || []).length, r.image ? 'Yes' : 'To follow',
       isForeign(r) ? r.currency : 'AUD', isForeign(r) ? { v: parseFloat(r.fxAmount) || 0, t: 'money' } : '', isForeign(r) && r.rate ? { v: Math.round(r.rate * 10000) / 10000, t: 'number' } : '',
@@ -1774,12 +1837,12 @@
       ENT_CATS.includes(r.category) ? travelCell(r) : '',
       r.payment === 'personal' ? 'Personal card / cash' : 'Company card',
     ]);
-    lines.push(null, ['', '', '', '', { v: 'TOTAL', t: 'bold' }, '', '', '', { v: total - totalGst, t: 'boldMoney' }, { v: totalGst, t: 'boldMoney' }, { v: total, t: 'boldMoney' }, '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    lines.push(null, ['', '', '', '', { v: 'TOTAL', t: 'bold' }, '', '', '', '', '', '', { v: total - totalGst, t: 'boldMoney' }, { v: totalGst, t: 'boldMoney' }, { v: total, t: 'boldMoney' }, '', '', '', '', '', '', '', '', '', '', '', '', '']);
     const sheets = [{
       name: 'Claim lines',
       columns: [
         { header: 'Ref', width: 6 }, { header: 'Claim month', width: 15 }, { header: 'Business unit', width: 14 }, { header: 'Date', width: 12, type: 'date' },
-        { header: 'Vendor', width: 28 }, { header: 'ABN', width: 16 }, { header: 'Expense type', width: 22 }, { header: 'Purpose', width: 40 },
+        { header: 'Vendor', width: 28 }, { header: 'ABN', width: 16 }, { header: 'Expense type', width: 22 }, { header: 'GL account', width: 11 }, { header: 'GL name', width: 22 }, { header: 'Tax code', width: 9 }, { header: 'Purpose', width: 40 },
         { header: 'Ex GST', width: 12, type: 'money' }, { header: 'GST', width: 10, type: 'money' }, { header: 'Total', width: 12, type: 'money' },
         { header: 'Supporting docs', width: 15, type: 'number' }, { header: 'Receipt', width: 11 },
         { header: 'Currency', width: 10 }, { header: 'Foreign total', width: 13, type: 'money' }, { header: 'Rate to AUD', width: 12, type: 'number' }, { header: 'AUD from', width: 15 },
@@ -1844,8 +1907,8 @@
 
   function buildClaimCsv(ordered, label) {
     const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const head = ['Ref', 'Claim month', 'Business unit', 'Date', 'Vendor', 'ABN', 'Expense type', 'Purpose', 'Ex GST (AUD)', 'GST (AUD)', 'Total (AUD)', 'Supporting docs', 'Receipt', 'Currency', 'Foreign total', 'Rate to AUD', 'AUD from', 'Split', 'Tax invoice', 'Attendees / travellers', 'Employee travelling', 'Paid with'];
-    const rows = ordered.map(r => [r.ref, label, r.unit || '', r.date ? r.date.split('-').reverse().join('/') : '', r.vendor || '', r.abn || '', r.category || '', r.purpose || '',
+    const head = ['Ref', 'Claim month', 'Business unit', 'Date', 'Vendor', 'ABN', 'Expense type', 'GL account', 'GL name', 'Tax code', 'Purpose', 'Ex GST (AUD)', 'GST (AUD)', 'Total (AUD)', 'Supporting docs', 'Receipt', 'Currency', 'Foreign total', 'Rate to AUD', 'AUD from', 'Split', 'Tax invoice', 'Attendees / travellers', 'Employee travelling', 'Paid with'];
+    const rows = ordered.map(r => [r.ref, label, r.unit || '', r.date ? r.date.split('-').reverse().join('/') : '', r.vendor || '', r.abn || '', r.category || '', r.glCode || '', r.glName || '', r.taxCode || '', r.purpose || '',
       ((parseFloat(r.amount) || 0) - (parseFloat(r.gst) || 0)).toFixed(2), (parseFloat(r.gst) || 0).toFixed(2), (parseFloat(r.amount) || 0).toFixed(2),
       (r.attachments || []).length, r.image ? 'Yes' : 'To follow',
       isForeign(r) ? r.currency : 'AUD', isForeign(r) ? (parseFloat(r.fxAmount) || 0).toFixed(2) : '', isForeign(r) && r.rate ? r.rate.toFixed(4) : '',
@@ -1914,12 +1977,367 @@
     $('sendSheet').hidden = true;
     if (p.copy) { toast(`Copy sent to ${to}`); return; }
     const claim = await getClaim(p.month);
-    claim.submissions.push({ at: new Date().toISOString(), to, total: p.total, items: p.items, exceptions: p.exceptions });
+    claim.submissions.push({ at: new Date().toISOString(), to, total: p.total, items: p.items, exceptions: p.exceptions, digest: p.digest });
     claim.status = 'submitted';
+    claim.approval = { status: 'awaiting', submissionNo: claim.submissions.length, digest: p.digest };
     await db.claims.put(claim);
     toast(`${monthLabel(p.month)} claim submitted – receipts locked`);
     renderList();
   }
+
+  /* ---------------- Approval ----------------
+     No server: the claim PDF carries the claim's data. The approver opens it in this app, checks the GL
+     coding and approves or rejects. That produces an approval PDF (carrying the decision) and, when
+     approved, the Sage upload file. Opening the approval PDF on the claimant's phone records the decision. */
+  const sageBranch = () => settings.sageBranch === '__other' ? (settings.sageBranchOther || '').trim().toUpperCase() : settings.sageBranch;
+  const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase() && !!String(a || '').trim();
+
+  async function claimPayload({ month, label, ordered, exceptions, submissionNo, previous, total, totalGst, copy, claim }) {
+    const lines = ordered.map(r => ({
+      ref: r.ref, date: r.date || '', vendor: r.vendor || '', purpose: r.purpose || '', category: r.category || '', unit: r.unit || '',
+      amount: r.amount === '' || r.amount == null ? '' : String(r.amount), gst: String(r.gst || '0'),
+      currency: r.currency || 'AUD', fxAmount: isForeign(r) ? String(r.fxAmount || '') : '', audBasis: r.audBasis || '',
+      receipt: !!r.image, taxInvIssue: r.taxInvIssue || '', attendees: r.attendeesText || '', travel: r.travelText || '',
+      gl: r.gl || '', splitOf: r.splitOfRef || '', abn: r.abn || '', payment: r.payment === 'personal' ? 'personal' : 'company',
+    }));
+    const digest = await Accounting.digest({ month, name: settings.name || '', lines, total: total.toFixed(2) });
+    const sub = copy ? claim.submissions[submissionNo - 1] : null;
+    const branch = sageBranch();
+    return {
+      kind: 'mentis-claim', v: 1, id: `${safeFile(settings.name || 'claimant')}|${month}|${submissionNo}|${digest}`, digest,
+      claimKey: month, month: monthOfKey(month), personal: isPersonalKey(month), label: monthLabel(monthOfKey(month)), submissionNo,
+      submittedAt: (sub && sub.at) || new Date().toISOString(),
+      claimant: {
+        name: settings.name || '', email: settings.myEmail || '', branch, region: settings.sageRegion || Accounting.regionFor(branch),
+        department: settings.sageDept || '', personalSupplier: settings.sagePersonalSupplier || '', cardSupplier: settings.sageCardSupplier || '',
+      },
+      total: total.toFixed(2), totalGst: totalGst.toFixed(2), previousTotal: previous ? previous.total : null,
+      exceptions: exceptions.map(x => ({ ref: x.ref || '', type: x.type, vendor: x.vendor || '', detail: x.detail })), lines,
+    };
+  }
+
+  /** A PDF made by this app: a claim to approve, or an approver's decision. Returns true if it was one. */
+  async function openDataPdf(file) {
+    let data = null;
+    try { data = await Accounting.readEmbedded(file); } catch (err) { console.error(err); }
+    if (!data) return false;
+    if (data.kind === 'mentis-claim') await receiveClaim(data);
+    else if (data.kind === 'mentis-approval') await applyDecision(data, { interactive: true });
+    else return false;
+    return true;
+  }
+  async function openClaimFile(file) {
+    if (!file) return;
+    closeAdd();
+    busy(true);
+    try {
+      if (!(await openDataPdf(file))) toast('That PDF isn’t a claim or approval from Mentis Expenses.', 4500);
+    } finally { busy(false); }
+  }
+  $('claimPdfInput').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; openClaimFile(f); });
+
+  /* ----- Approver side ----- */
+  let approving = null; // approval record on screen
+  const defaultSage = d => ({
+    supplier: d.personal ? (d.claimant.personalSupplier || '') : (d.claimant.cardSupplier || settings.sageCardSupplier || Accounting.SAGE.cardSupplier || ''),
+    branch: d.claimant.branch || '', region: d.claimant.region || Accounting.regionFor(d.claimant.branch) || '', department: d.claimant.department || 'FINANC01',
+  });
+  async function receiveClaim(data) {
+    let rec = await db.approvals.get(data.id);
+    if (!rec) {
+      rec = { id: data.id, data, received: new Date().toISOString(), status: 'pending', gl: {}, tax: {}, sage: defaultSage(data), postDate: Accounting.lastDayOf(data.month), comment: '' };
+      // an earlier version of the same claim still waiting is replaced by this one
+      for (const o of await db.approvals.all()) {
+        if (o.status === 'pending' && o.data.claimKey === data.claimKey && sameName(o.data.claimant.name, data.claimant.name) && o.data.submissionNo < data.submissionNo) {
+          o.status = 'superseded'; await db.approvals.put(o);
+        }
+      }
+      await db.approvals.put(rec);
+    }
+    openApproval(rec);
+  }
+  function approvalLines(rec) {
+    return rec.data.lines.map(l => {
+      const gl = rec.gl[l.ref] !== undefined ? rec.gl[l.ref] : l.gl;
+      const foreign = !!l.currency && l.currency !== 'AUD';
+      const autoTax = gl ? Accounting.taxCodeFor(gl, { gst: l.gst, foreign }) : '';
+      const taxCode = rec.tax[l.ref] || autoTax;
+      const amt = Accounting.sageAmounts(l.amount, l.gst, taxCode);
+      const g = Accounting.gl(gl);
+      const flags = [!l.receipt ? 'Receipt to follow' : '', l.taxInvIssue ? 'No tax invoice' : '', l.audBasis === 'estimate' ? 'AUD estimated' : '',
+        foreign ? `${l.currency} ${(parseFloat(l.fxAmount) || 0).toFixed(2)}` : '', l.splitOf ? `Split of ${l.splitOf}` : '', l.travel || '',
+        l.attendees ? `People: ${l.attendees}` : ''].filter(Boolean);
+      return { ...l, gl: g ? gl : '', glCode: g ? g.code : '', glName: g ? g.name : '', autoTax, taxCode, net: amt.net, sageGst: amt.gst, total: parseFloat(l.amount) || 0, flags };
+    });
+  }
+  const decisionChip = rec => rec.status === 'approved' ? '<span class="status s-ok">✓ Approved</span>'
+    : rec.status === 'rejected' ? '<span class="status s-bad">Rejected</span>'
+    : rec.status === 'superseded' ? '<span class="status s-open">Replaced by resubmission</span>' : '<span class="status s-await">Waiting for you</span>';
+
+  async function openApproval(recOrId) {
+    approving = typeof recOrId === 'string' ? await db.approvals.get(recOrId) : recOrId;
+    if (!approving) return;
+    renderApproval();
+    show('approveView');
+  }
+  function renderApproval() {
+    const rec = approving, d = rec.data, open = rec.status === 'pending';
+    const lines = approvalLines(rec);
+    const self = sameName(d.claimant.name, settings.name);
+    const tax = ['OC001', 'OC002', 'OC003'];
+    const dis = open ? '' : ' disabled';
+    $('approveBody').innerHTML = `
+      <div class="month">
+        <div class="month-head">
+          <div><h2>${escapeHtml(d.claimant.name || 'Claimant')}</h2>
+            <div class="month-meta">${escapeHtml(d.label)} · ${d.personal ? '<span class="pay-chip">Personal reimbursement</span>' : 'Company card'}${d.submissionNo > 1 ? ` · resubmission ${d.submissionNo - 1}` : ''}</div>
+            <div class="month-meta">Submitted ${fmtDay(d.submittedAt.slice(0, 10))} · claim code ${escapeHtml(d.digest)}${d.claimant.email ? ` · ${escapeHtml(d.claimant.email)}` : ''}</div></div>
+          <div class="month-total">${money(d.total)}<span class="gst-line">GST ${money(d.totalGst)}</span>${decisionChip(rec)}</div>
+        </div>
+        ${rec.status !== 'pending' && rec.status !== 'superseded' ? `<div class="month-sub">${rec.status === 'approved' ? 'Approved' : 'Rejected'} by ${escapeHtml(rec.by)} on ${fmtDay(rec.decidedAt.slice(0, 10))}${rec.comment ? ` – “${escapeHtml(rec.comment)}”` : ''}</div>` : ''}
+      </div>
+      ${self && open ? '<div class="exceptions-box">This is your own claim. Self-approval is allowed but is marked on the approval for accounts.</div>' : ''}
+      ${d.submissionNo > 1 ? `<div class="exceptions-box"><strong>Changes since the last submission</strong>${d.previousTotal != null ? ` (was ${money(d.previousTotal)})` : ''}:<ul>${d.exceptions.length ? d.exceptions.map(x => `<li><b>${escapeHtml(x.type)}</b> ${escapeHtml(x.ref)} ${escapeHtml(x.vendor)}: ${escapeHtml(x.detail)}</li>`).join('') : '<li>No line changes</li>'}</ul></div>` : ''}
+      <h3 class="appr-h">Lines – check the GL coding</h3>
+      ${lines.map(l => `
+        <div class="appr-line" data-ref="${escapeHtml(l.ref)}">
+          <div class="appr-top"><span class="muted">${escapeHtml(l.ref)}</span> <b>${escapeHtml(l.vendor)}</b><span class="appr-amt">${money(l.total)}</span></div>
+          <div class="month-meta">${[fmtDay(l.date), l.unit, l.category, l.purpose].filter(Boolean).map(escapeHtml).join(' · ')} · GST ${money(l.gst)}</div>
+          ${l.flags.length ? `<div class="tags">${l.flags.map(f => `<span class="tag${/to follow|No tax|estimated/.test(f) ? ' warn-tag' : ''}">${escapeHtml(f)}</span>`).join('')}</div>` : ''}
+          <div class="appr-codes">
+            <select data-k="gl" aria-label="GL account"${dis}>${glOptions('', l.gl).replace('Choose GL account…', l.gl ? 'Choose GL account…' : '⚠ Choose GL account…')}</select>
+            <select data-k="tax" aria-label="Tax code"${dis}><option value="">${l.autoTax ? `Auto ${l.autoTax}` : 'Tax…'}</option>${tax.map(t => `<option${rec.tax[l.ref] === t ? ' selected' : ''}>${t}</option>`).join('')}</select>
+          </div>
+          <div class="month-meta">Sage: net ${money(l.net)} · GST ${money(l.sageGst)} · ${escapeHtml(l.taxCode || 'no tax code')}</div>
+        </div>`).join('')}
+      <h3 class="appr-h">Sage details</h3>
+      <div class="form appr-sage">
+        <div class="row">
+          <label class="field grow"><span>Supplier code</span><input data-s="supplier" value="${escapeHtml(rec.sage.supplier)}" placeholder="${d.personal ? 'Claimant’s supplier code' : 'BP1001673'}"${dis}></label>
+          <label class="field grow"><span>Branch</span><input data-s="branch" value="${escapeHtml(rec.sage.branch)}" placeholder="BRI01"${dis}></label>
+        </div>
+        <div class="row">
+          <label class="field grow"><span>Region</span><input data-s="region" value="${escapeHtml(rec.sage.region)}" placeholder="QUEENL01"${dis}></label>
+          <label class="field grow"><span>Department</span><input data-s="department" value="${escapeHtml(rec.sage.department)}" placeholder="FINANC01"${dis}></label>
+        </div>
+        <label class="field"><span>Posting date</span><input type="date" data-s="postDate" value="${escapeHtml(rec.postDate)}"${dis}></label>
+        <label class="field"><span>Comment ${open ? '(required to reject – goes to the claimant and accounts)' : ''}</span><textarea id="apprComment" rows="3"${dis}>${escapeHtml(rec.comment || '')}</textarea></label>
+      </div>`;
+    $('rejectBtn').hidden = !open;
+    $('approveBtn').textContent = open ? 'Approve' : rec.status === 'superseded' ? 'Reopen' : 'Send again';
+    $('approveBtn').hidden = false;
+    $('rejectBtn').textContent = 'Reject';
+  }
+  $('approveBody').addEventListener('change', async e => {
+    if (!approving || approving.status !== 'pending') return;
+    const t = e.target, line = t.closest('.appr-line');
+    if (line && t.dataset.k === 'gl') approving.gl[line.dataset.ref] = t.value;
+    else if (line && t.dataset.k === 'tax') { if (t.value) approving.tax[line.dataset.ref] = t.value; else delete approving.tax[line.dataset.ref]; }
+    else if (t.dataset.s === 'postDate') approving.postDate = t.value;
+    else if (t.dataset.s) {
+      approving.sage[t.dataset.s] = t.value.trim().toUpperCase();
+      if (t.dataset.s === 'branch' && !approving.sage.region) approving.sage.region = Accounting.regionFor(approving.sage.branch);
+    } else return;
+    await db.approvals.put(approving);
+    const y = window.scrollY; renderApproval(); window.scrollTo(0, y);
+  });
+  $('approveBody').addEventListener('input', e => {
+    if (e.target.id === 'apprComment' && approving && approving.status === 'pending') { approving.comment = e.target.value; db.approvals.put(approving); }
+  });
+  $('approveBack').onclick = () => { approving = null; show('listView'); renderList(); };
+  $('rejectBtn').onclick = () => decide('rejected');
+  $('approveBtn').onclick = async () => {
+    if (!approving) return;
+    if (approving.status === 'pending') return decide('approved');
+    if (approving.status === 'superseded') {
+      if (!confirm('This claim was replaced by a resubmission. Open it for a decision anyway?')) return;
+      approving.status = 'pending'; await db.approvals.put(approving); return renderApproval();
+    }
+    openDecisionSend(approving);
+  };
+
+  async function decide(decision) {
+    const rec = approving, d = rec.data;
+    if (!settings.name) { toast('Add your name in Settings first – it goes on the approval.', 4500); return; }
+    rec.comment = ($('apprComment') || {}).value || rec.comment || '';
+    const lines = approvalLines(rec);
+    if (decision === 'approved') {
+      const noGl = lines.filter(l => !l.glCode);
+      if (noGl.length) return toast(`Choose a GL account for ${noGl.map(l => l.ref).join(', ')}.`, 4500);
+      const s = rec.sage;
+      if (!s.supplier || !s.branch || !s.region || !s.department) return toast('Fill in the Sage supplier code, branch, region and department.', 4500);
+      if (!confirm(`Approve ${d.claimant.name || 'this'}’s ${d.label} claim for ${money(d.total)}?`)) return;
+    } else {
+      if (!rec.comment.trim()) { toast('Add a comment saying why it’s rejected.'); $('apprComment').focus(); return; }
+      if (!confirm(`Reject ${d.claimant.name || 'this'}’s ${d.label} claim?`)) return;
+    }
+    Object.assign(rec, { status: decision, by: settings.name, byEmail: settings.myEmail || '', decidedAt: new Date().toISOString(), self: sameName(d.claimant.name, settings.name) });
+    await db.approvals.put(rec);
+    await applyDecision(decisionPayload(rec), { interactive: false }); // own claim on this phone: record it straight away
+    renderApproval();
+    openDecisionSend(rec);
+  }
+  const decisionPayload = rec => ({
+    kind: 'mentis-approval', v: 1, claimId: rec.data.id, claimKey: rec.data.claimKey, digest: rec.data.digest, submissionNo: rec.data.submissionNo,
+    claimant: rec.data.claimant.name, label: rec.data.label, decision: rec.status, by: rec.by, byEmail: rec.byEmail || '', at: rec.decidedAt, comment: rec.comment || '',
+    lines: approvalLines(rec).map(l => ({ ref: l.ref, gl: l.gl, taxCode: l.taxCode })),
+  });
+  const sageClaimOf = rec => ({
+    month: rec.data.month, personal: rec.data.personal, postDate: rec.postDate, sage: rec.sage, claimant: rec.data.claimant.name,
+    lines: approvalLines(rec).map(l => ({ vendor: l.vendor, gl: l.gl, taxCode: l.taxCode, net: l.net, gst: l.sageGst })),
+  });
+  const claimFileTag = d => `${safeFile(d.claimant.name || 'claimant')}_${d.month}${d.personal ? '_personal' : ''}${d.submissionNo > 1 ? `_resub${d.submissionNo - 1}` : ''}`;
+  function decisionFiles(rec) {
+    const d = rec.data, lines = approvalLines(rec);
+    const pdf = ExpensePdf.buildApprovalReport({
+      decision: rec.status, claimant: d.claimant.name, claimLabel: d.label, personal: d.personal, submissionNo: d.submissionNo, submittedAt: d.submittedAt,
+      code: d.digest, approver: rec.by, decidedAt: rec.decidedAt, comment: rec.comment, selfApproved: !!rec.self, sage: rec.sage, postDate: rec.postDate,
+      lines: lines.map(l => ({ ref: l.ref, date: l.date, vendor: l.vendor, category: l.category, purpose: l.purpose, glCode: l.glCode, glName: l.glName, taxCode: l.taxCode, net: l.net, gst: l.sageGst, total: l.total, flags: l.flags.filter(f => !/^People/.test(f)).join(' · ') })),
+      total: d.total, embed: Accounting.embedBlock(decisionPayload(rec)), primary: settings.primary, accent: settings.accent,
+    });
+    const tag = claimFileTag(d);
+    const files = [new File([pdf], `${rec.status === 'approved' ? 'Approved' : 'Rejected'}_${tag}.pdf`, { type: 'application/pdf' })];
+    if (rec.status === 'approved') files.push(new File([Accounting.buildSageCsv([sageClaimOf(rec)])], `Sage_${tag}.csv`, { type: 'text/csv' }));
+    return files;
+  }
+  function openDecisionSend(rec) {
+    const d = rec.data, ok = rec.status === 'approved';
+    const files = decisionFiles(rec);
+    const copies = [ok && settings.accountsEmail ? ['Accounts', settings.accountsEmail] : null, d.claimant.email ? ['Claimant', d.claimant.email] : null].filter(Boolean);
+    openOut({
+      title: ok ? 'Send the approval' : 'Send the rejection',
+      summary: ok
+        ? `Send to <b>accounts</b> (approval PDF + Sage upload file) and the <b>claimant</b> – opening the PDF in their app marks the claim approved.`
+        : `Send to the <b>claimant</b>. Opening the PDF in their app marks the claim rejected so they can fix and resubmit it.`,
+      copies, files,
+      subject: `${ok ? 'Approved' : 'Rejected'}: ${d.personal ? 'reimbursement' : 'expense'} claim – ${d.claimant.name} – ${d.label}${d.submissionNo > 1 ? ` (resubmission ${d.submissionNo - 1})` : ''}`,
+      text: `Hi,\n\n${d.claimant.name}’s ${d.label} ${d.personal ? 'reimbursement' : 'expense'} claim (${money(d.total)}, claim code ${d.digest}) has been ${ok ? 'approved' : 'rejected'} by ${rec.by}.` +
+        `${rec.comment ? `\n\nComment: ${rec.comment}` : ''}${ok ? '\n\nAttached: approval PDF with the GL coding, and the Sage upload file.' : '\n\nPlease fix and resubmit. Open the attached PDF in Mentis Expenses to update the claim.'}\n\nThanks,\n${rec.by}`,
+      onSent: async () => { if (ok && !rec.exportedAt) { rec.exportedAt = new Date().toISOString(); await db.approvals.put(rec); } },
+    });
+  }
+
+  /* ----- Claimant side: record the approver's decision ----- */
+  async function applyDecision(a, { interactive }) {
+    const claim = await db.claims.get(a.claimKey);
+    const sub = claim && claim.submissions[a.submissionNo - 1];
+    if (!claim || !sub || (sub.digest && sub.digest !== a.digest) || (!interactive && !sameName(a.claimant, settings.name))) {
+      if (interactive) toast(`This ${a.decision === 'approved' ? 'approval' : 'rejection'} is for ${a.claimant || 'someone'}’s ${a.label || ''} claim, which isn’t on this phone (or has changed since).`, 5500);
+      return false;
+    }
+    if (interactive && !sameName(a.claimant, settings.name) && !confirm(`This decision is for ${a.claimant}. Record it on this phone anyway?`)) return false;
+    sub.approval = { status: a.decision, by: a.by, at: a.at, comment: a.comment };
+    const latest = a.submissionNo === claim.submissions.length;
+    if (latest) claim.approval = { status: a.decision, by: a.by, at: a.at, comment: a.comment, submissionNo: a.submissionNo, digest: a.digest };
+    await db.claims.put(claim);
+    if (!interactive) return true;
+    show('listView');
+    filter = claim.status === 'submitted' ? 'submitted' : 'open';
+    document.querySelectorAll('#tabsBar .tab').forEach(t => t.classList.toggle('active', t.dataset.filter === filter));
+    await renderList();
+    if (!latest) toast(`Recorded – note this was for an earlier submission of the ${monthLabel(a.claimKey)} claim.`, 5000);
+    else if (a.decision === 'approved') toast(`${monthLabel(a.claimKey)} claim approved by ${a.by} ✓`, 4500);
+    else if (claim.status === 'submitted' && confirm(`${monthLabel(a.claimKey)} claim rejected by ${a.by}:\n\n“${a.comment}”\n\nReopen the claim now to fix it?`)) {
+      await reopenClaim(a.claimKey, { ask: false });
+      filter = 'open';
+      document.querySelectorAll('#tabsBar .tab').forEach(t => t.classList.toggle('active', t.dataset.filter === filter));
+      await renderList();
+    }
+    return true;
+  }
+
+  /* ----- Approvals tab ----- */
+  async function renderApprovals() {
+    const all = (await db.approvals.all()).sort((a, b) => (b.received || '').localeCompare(a.received || ''));
+    const wrap = $('monthList');
+    wrap.innerHTML = '';
+    const pending = all.filter(a => a.status === 'pending');
+    const unexported = all.filter(a => a.status === 'approved' && !a.exportedAt);
+    const intro = document.createElement('div');
+    intro.className = 'recon-intro';
+    intro.innerHTML = `<p>Claims sent to you for approval. Open the claim PDF from the email here (or share it to the app), check the GL coding, then approve or reject.</p>
+      <label class="btn primary">Open a claim PDF<input type="file" accept="application/pdf,.pdf" hidden></label>
+      ${unexported.length ? `<button type="button" class="btn ghost" id="sageBatchBtn" style="margin-top:8px;width:100%">Sage file for ${plural(unexported.length, 'approved claim')} not yet sent</button>` : ''}`;
+    intro.querySelector('input').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; openClaimFile(f); });
+    wrap.appendChild(intro);
+    if (unexported.length) intro.querySelector('#sageBatchBtn').onclick = () => sageBatch(unexported);
+    const group = (title, list) => {
+      if (!list.length) return;
+      const sec = document.createElement('section');
+      sec.className = 'month';
+      sec.innerHTML = `<div class="month-head"><h2>${title}</h2></div><ul class="receipt-list">${list.map(a => `
+        <li class="receipt appr-item" data-appr="${escapeHtml(a.id)}">
+          <div class="info"><div class="desc">${escapeHtml(a.data.claimant.name || 'Claimant')}</div>
+            <div class="purpose">${escapeHtml(a.data.label)}${a.data.personal ? ' · personal reimbursement' : ''}${a.data.submissionNo > 1 ? ` · resubmission ${a.data.submissionNo - 1}` : ''}</div>
+            <div class="meta">${plural(a.data.lines.length, 'line')} · received ${fmtDay((a.received || '').slice(0, 10))}${a.decidedAt ? ` · ${a.status} ${fmtDay(a.decidedAt.slice(0, 10))}` : ''}${a.status === 'approved' && !a.exportedAt ? ' · <span class="warn">Sage file not sent</span>' : ''}</div></div>
+          <div class="amt">${money(a.data.total)}<div>${decisionChip(a)}</div></div>
+        </li>`).join('')}</ul>`;
+      wrap.appendChild(sec);
+    };
+    group('Waiting for you', pending);
+    group('Decided', all.filter(a => a.status !== 'pending'));
+    $('emptyState').hidden = true;
+  }
+  $('monthList').addEventListener('click', e => {
+    const a = e.target.closest('[data-appr]');
+    if (a) openApproval(a.dataset.appr);
+  });
+  function sageBatch(list) {
+    const csv = Accounting.buildSageCsv(list.map(sageClaimOf));
+    const total = list.reduce((s, a) => s + (parseFloat(a.data.total) || 0), 0);
+    openOut({
+      title: 'Sage upload file',
+      summary: `${plural(list.length, 'approved claim')} · ${money(total)}<br>${list.map(a => `${escapeHtml(a.data.claimant.name)} – ${escapeHtml(a.data.label)}${a.data.personal ? ' (personal)' : ''}`).join('<br>')}`,
+      copies: settings.accountsEmail ? [['Accounts', settings.accountsEmail]] : [],
+      files: [new File([csv], `Sage_upload_${todayISO()}.csv`, { type: 'text/csv' })],
+      subject: `Sage upload – ${plural(list.length, 'approved expense claim')}`,
+      text: `Hi,\n\nAttached is the Sage upload file for ${plural(list.length, 'approved claim')} (${money(total)}):\n${list.map(a => `- ${a.data.claimant.name} – ${a.data.label}${a.data.personal ? ' (personal reimbursement)' : ''}: ${money(a.data.total)}`).join('\n')}\n\nThanks,\n${settings.name || ''}`,
+      onSent: async () => { for (const a of list) { a.exportedAt = new Date().toISOString(); await db.approvals.put(a); } renderList(); },
+    });
+  }
+
+  /* ----- Sending approvals / Sage files ----- */
+  let out = null;
+  function openOut(o) {
+    out = o;
+    $('outTitle').textContent = o.title;
+    $('outSummary').innerHTML = o.summary;
+    $('outCopies').innerHTML = o.copies.map(([label, em]) => `<button type="button" class="btn ghost small" data-copy="${escapeHtml(em)}">Copy ${escapeHtml(label.toLowerCase())}: ${escapeHtml(em)}</button>`).join('');
+    $('outFiles').innerHTML = '📎 ' + o.files.map(f => escapeHtml(f.name)).join(', ');
+    const canShare = !!(navigator.canShare && navigator.canShare({ files: o.files }));
+    $('outShare').hidden = !canShare && !(navigator.canShare && navigator.canShare({ files: [o.files[0]] }));
+    $('outNote').textContent = $('outShare').hidden ? 'This device can’t attach files to an email directly – save them and attach them.' : 'Tap Copy first if you want to paste an address into “To”.';
+    $('outSheet').hidden = false;
+  }
+  $('outCopies').addEventListener('click', async e => {
+    const b = e.target.closest('[data-copy]'); if (!b) return;
+    try { await navigator.clipboard.writeText(b.dataset.copy); toast(`Copied ${b.dataset.copy}`); }
+    catch { toast(`Couldn’t copy – the address is ${b.dataset.copy}`, 5000); }
+  });
+  $('outClose').onclick = () => { $('outSheet').hidden = true; out = null; };
+  $('outSave').onclick = async () => {
+    if (!out) return;
+    saveFiles(out.files);
+    if (out.onSent) await out.onSent();
+    toast('Files saved – attach them to your email.', 4000);
+  };
+  $('outShare').onclick = async () => {
+    if (!out) return;
+    const all = navigator.canShare && navigator.canShare({ files: out.files });
+    const files = all ? out.files : [out.files[0]];
+    try {
+      await navigator.share({ files, title: out.subject, text: out.text });
+      if (!all) saveFiles(out.files.slice(1));
+      if (out.onSent) await out.onSent();
+      $('outSheet').hidden = true;
+      toast('Sent');
+      if (approving) renderApproval();
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      console.error(err);
+      toast(`The phone wouldn’t open the app menu (${err && err.name || 'error'}). Use Save files instead.`, 5000);
+    }
+  };
 
   /* ---------------- Spending dashboard ---------------- */
   let dashPeriod = 'fy';

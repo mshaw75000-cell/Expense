@@ -84,7 +84,7 @@
    * exceptions: [{ ref, type, vendor, detail }] – only on a resubmission
    */
   function buildClaimReport({ name, monthLabel, submissionNo = 1, previous = null, receipts, exceptions = [], personal = false,
-    primary = '#0b2a4a', accent = '#00a6a6', brand = 'mentis' }) {
+    primary = '#0b2a4a', accent = '#00a6a6', brand = 'mentis', embed = '', approver = '' }) {
     const pages = [];
     const muted = '#677585', ink = '#13202e', warn = '#b26a00';
     const sum = (list, k) => list.reduce((t, r) => t + (parseFloat(r[k]) || 0), 0);
@@ -148,7 +148,7 @@
       for (const r of list) {
         const descW = cols.ex - cols.desc - 60;
         const fx = r.currency && r.currency !== 'AUD' ? `${r.currency} ${(parseFloat(r.fxAmount) || 0).toFixed(2)}${r.rate ? ` @ ${r.rate.toFixed(4)}` : ''}${r.audEstimated ? ' (AUD ESTIMATED)' : ''}` : '';
-        const flags = [r.splitOfRef ? `Split of ${r.splitOfRef}` : '', r.travelText || '', r.taxInvIssue ? 'NO TAX INVOICE' : '', r.attendeesText ? `${(r.attendees || []).filter(p => p.name).length} attendee(s)` : ''].filter(Boolean).join(' · ');
+        const flags = [r.glCode ? `GL ${r.glCode}` : '', r.splitOfRef ? `Split of ${r.splitOfRef}` : '', r.travelText || '', r.taxInvIssue ? 'NO TAX INVOICE' : '', r.attendeesText ? `${(r.attendees || []).filter(p => p.name).length} attendee(s)` : ''].filter(Boolean).join(' · ');
         const sub = [fx, r.category, r.purpose, flags].filter(Boolean).join(' · ');
         const subLines = sub ? wrap(sub, 9, descW).slice(0, 3) : [];
         const rowH = 16 + subLines.length * 11 + 8;
@@ -191,6 +191,7 @@
       p.text('I confirm these expenses were incurred for business purposes.', M, y, { size: 9, color: muted }); y += 26;
       p.line(M, y, M + 200, '#13202e', 0.5);
       p.text(`${name || 'Claimant'}  ·  ${today}`, M, y + 12, { size: 9, color: muted });
+      if (approver) p.text(`For approval: ${approver}`, PAGE_W - M, y + 12, { size: 9, color: muted, align: 'right' });
     }
 
     // ---- Exception report (resubmissions) ----
@@ -297,7 +298,93 @@
     });
 
     pages.forEach((pg, i) => footer(pg, i + 1, pages.length));
-    return serialize(pages);
+    return serialize(pages, embed);
+  }
+
+  /**
+   * Approval / rejection record for a claim, with the GL coding accounts will post.
+   * lines: [{ ref, date, vendor, category, purpose, glCode, glName, taxCode, net, gst, total, flags }]
+   */
+  function buildApprovalReport({ decision, claimant, claimLabel, personal = false, submissionNo = 1, submittedAt = '', code = '',
+    approver, decidedAt, comment = '', selfApproved = false, sage = null, postDate = '', lines, total, embed = '',
+    primary = '#0b2a4a', accent = '#00a6a6', brand = 'mentis' }) {
+    const pages = [];
+    const muted = '#677585', ink = '#13202e', ok = '#1d7a46', bad = '#b3261e', warn = '#b26a00';
+    const approved = decision === 'approved';
+    const title = approved ? 'Claim Approved' : 'Claim Rejected';
+    const header = pg => {
+      pg.rect(0, 0, PAGE_W, 64, primary);
+      pg.text(brand.toLowerCase(), M, 40, { size: 22, bold: true, color: '#ffffff' });
+      pg.text('.', M + textWidth(brand.toLowerCase(), 22, true), 40, { size: 22, bold: true, color: accent });
+      pg.text(title, PAGE_W - M, 40, { size: 13, bold: true, color: '#ffffff', align: 'right' });
+    };
+    let p = new Page(); pages.push(p); header(p);
+    let y = 100;
+    p.text(`${claimant || 'Claimant'} – ${claimLabel}`, M, y, { size: 18, bold: true, color: ink }); y += 18;
+    p.text(`${personal ? 'Personal reimbursement claim' : 'Company card claim'}${submissionNo > 1 ? ` · resubmission ${submissionNo - 1}` : ''}${submittedAt ? ` · submitted ${fmtDate(submittedAt.slice(0, 10))}` : ''}${code ? ` · claim code ${code}` : ''}`, M, y, { size: 10, color: muted }); y += 18;
+
+    const bannerLines = comment ? wrap(comment, 10, PAGE_W - 2 * M - 20).slice(0, 8) : [];
+    const bh = 30 + bannerLines.length * 13 + (selfApproved ? 14 : 0);
+    p.rect(M, y, PAGE_W - 2 * M, bh, approved ? '#e3f4ea' : '#fbe7e6');
+    p.text(`${approved ? 'APPROVED' : 'REJECTED'} by ${approver || '(approver)'} on ${fmtDate(decidedAt.slice(0, 10))}`, M + 10, y + 19, { size: 12, bold: true, color: approved ? ok : bad });
+    let yy = y + 34;
+    if (selfApproved) { p.text('Note: approved by the claimant (self-approval).', M + 10, yy, { size: 9, bold: true, color: warn }); yy += 14; }
+    for (const l of bannerLines) { p.text(l, M + 10, yy, { size: 10, color: ink }); yy += 13; }
+    y += bh + 18;
+
+    if (approved && sage) {
+      p.text(`Sage: supplier ${sage.supplier || '?'} · branch ${sage.branch || '?'} · region ${sage.region || '?'} · department ${sage.department || '?'}${postDate ? ` · posting date ${fmtDate(postDate)}` : ''}`, M, y, { size: 9, color: muted });
+      y += 18;
+    }
+
+    const cols = { ref: M + 4, date: M + 34, desc: M + 80, gl: M + 240, tax: M + 328, net: PAGE_W - M - 112, gst: PAGE_W - M - 56, amt: PAGE_W - M };
+    const head = () => {
+      p.rect(M, y - 14, PAGE_W - 2 * M, 22, '#eef1f5');
+      [['REF', cols.ref], ['DATE', cols.date], ['VENDOR / TYPE', cols.desc], ['GL ACCOUNT', cols.gl], ['TAX', cols.tax]].forEach(([t, x]) => p.text(t, x, y + 1, { size: 8, bold: true, color: muted }));
+      p.text('NET', cols.net - 4, y + 1, { size: 8, bold: true, color: muted, align: 'right' });
+      p.text('GST', cols.gst - 4, y + 1, { size: 8, bold: true, color: muted, align: 'right' });
+      p.text('TOTAL', cols.amt - 4, y + 1, { size: 8, bold: true, color: muted, align: 'right' });
+      y += 24;
+    };
+    head();
+    let sNet = 0, sGst = 0;
+    for (const l of lines) {
+      const sub = [l.category, l.purpose, l.flags].filter(Boolean).join(' · ');
+      const subLines = sub ? wrap(sub, 8, cols.gl - cols.desc - 8).slice(0, 2) : [];
+      const rowH = 14 + Math.max(subLines.length * 10, l.glName ? 10 : 0) + 8;
+      if (y + rowH > PAGE_H - 80) { p = new Page(); pages.push(p); header(p); y = 100; head(); }
+      p.text(l.ref, cols.ref, y, { size: 9, color: muted });
+      p.text(fmtDate(l.date, true), cols.date, y, { size: 9, color: ink });
+      p.text(fit(l.vendor || '', 9, cols.gl - cols.desc - 8, true), cols.desc, y, { size: 9, bold: true, color: ink });
+      p.text(l.glCode || 'NOT SET', cols.gl, y, { size: 9, bold: !l.glCode, color: l.glCode ? ink : bad });
+      if (l.glName) p.text(fit(l.glName, 8, cols.tax - cols.gl - 6), cols.gl, y + 11, { size: 8, color: muted });
+      p.text(l.taxCode || '', cols.tax, y, { size: 9, color: ink });
+      p.text(money(l.net), cols.net - 4, y, { size: 9, color: ink, align: 'right' });
+      p.text(money(l.gst), cols.gst - 4, y, { size: 9, color: ink, align: 'right' });
+      p.text(money(l.total), cols.amt - 4, y, { size: 9, bold: true, color: ink, align: 'right' });
+      let sy = y + 11;
+      for (const s of subLines) { p.text(s, cols.desc, sy, { size: 8, color: muted }); sy += 10; }
+      sNet += parseFloat(l.net) || 0; sGst += parseFloat(l.gst) || 0;
+      y += rowH;
+      p.line(M, y - 11, PAGE_W - M, '#dfe4ea');
+    }
+    if (y + 70 > PAGE_H - 50) { p = new Page(); pages.push(p); header(p); y = 100; }
+    p.text('Total', cols.gl, y + 4, { size: 10, bold: true, color: ink });
+    p.text(money(sNet), cols.net - 4, y + 4, { size: 10, bold: true, color: ink, align: 'right' });
+    p.text(money(sGst), cols.gst - 4, y + 4, { size: 10, bold: true, color: ink, align: 'right' });
+    p.text(money(total), cols.amt - 4, y + 4, { size: 10, bold: true, color: ink, align: 'right' });
+    y += 40;
+    p.line(M, y, M + 200, ink, 0.5);
+    p.text(`${approver || ''}  ·  ${approved ? 'Approved' : 'Rejected'} ${fmtDate(decidedAt.slice(0, 10))}`, M, y + 12, { size: 9, color: muted });
+    if (approved) p.text('Net and GST are as posted to Sage (OC003 / OC002 lines carry no GST).', M, y + 30, { size: 8, color: muted });
+
+    const today = fmtDate(decidedAt.slice(0, 10));
+    pages.forEach((pg, i) => {
+      pg.line(M, PAGE_H - 34, PAGE_W - M, '#dfe4ea');
+      pg.text(`${claimant || ''} · ${claimLabel} · ${approved ? 'approved' : 'rejected'} ${today}${code ? ' · claim code ' + code : ''}`, M, PAGE_H - 20, { size: 8, color: muted });
+      pg.text(`Page ${i + 1} of ${pages.length}`, PAGE_W - M, PAGE_H - 20, { size: 8, color: muted, align: 'right' });
+    });
+    return serialize(pages, embed);
   }
 
   function fmtDate(iso, short) {
@@ -309,7 +396,7 @@
       : dt.toLocaleDateString('en-AU', { year: 'numeric', month: 'short', day: 'numeric' });
   }
 
-  function serialize(pages) {
+  function serialize(pages, embed = '') {
     const enc = s => { const b = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 255; return b; };
     const chunks = [];
     let offset = 0;
@@ -323,7 +410,9 @@
     const pageIds = pages.map(() => alloc());
 
     push('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
-    writeObj(catalogId, `<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
+    // App data (claim / approval) rides along as an unfiltered stream the app can find again.
+    const dataId = embed ? alloc() : 0;
+    writeObj(catalogId, `<< /Type /Catalog /Pages ${pagesId} 0 R${dataId ? ` /MentisData ${dataId} 0 R` : ''} >>`);
     writeObj(pagesId, `<< /Type /Pages /Kids [${pageIds.map(i => i + ' 0 R').join(' ')}] /Count ${pages.length} >>`);
     writeObj(f1, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
     writeObj(f2, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
@@ -340,6 +429,7 @@
       writeObj(pageIds[i], `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${PAGE_W} ${PAGE_H}] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >> /XObject << ${xobjs.join(' ')} >> >> /Contents ${cid} 0 R >>`);
     });
 
+    if (dataId) writeObj(dataId, `<< /Length ${embed.length} >>\nstream\n`, embed, '\nendstream');
     const xref = offset;
     let x = `xref\n0 ${nextId}\n0000000000 65535 f \n`;
     for (let id = 1; id < nextId; id++) x += String(offsets[id]).padStart(10, '0') + ' 00000 n \n';
@@ -348,5 +438,5 @@
     return new Blob(chunks, { type: 'application/pdf' });
   }
 
-  window.ExpensePdf = { buildClaimReport, money, fmtDate };
+  window.ExpensePdf = { buildClaimReport, buildApprovalReport, money, fmtDate };
 })();
